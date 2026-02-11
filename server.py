@@ -27,74 +27,54 @@ DEPARTMENTS = {
     "Офис": 1000000003
 }
 
+@app.route("/")
+def home():
+    return "Itigris GPT Server is running"
 
-def fetch_all_pages(payload):
-    all_data = []
-    page = 1
+@app.route("/inventory", methods=["GET"])
+def get_inventory():
+    category = request.args.get("category")
+    department_name = request.args.get("department")
 
-    while True:
-        payload["page"] = page
-        url = f"https://optima.itigris.ru/{ITIGRIS_APP_NAME}/remoteRemains/list?key={ITIGRIS_API_KEY}"
+    if not category:
+        return jsonify({"error": "Category is required"}), 400
 
-        response = requests.post(url, json=payload)
+    if not ITIGRIS_APP_NAME or not ITIGRIS_API_KEY:
+        return jsonify({"error": "Environment variables not configured"}), 500
 
-        if response.status_code != 200:
-            return {"error": response.text, "status": response.status_code}
+    base_url = f"https://optima.itigris.ru/{ITIGRIS_APP_NAME}/remoteRemains/list"
 
-        data = response.json()
-
-        if not data:
-            break
-
-        all_data.extend(data)
-        page += 1
-
-    return all_data
-
-
-@app.route("/remains", methods=["POST"])
-def get_remains():
-    request_data = request.json
-
-    product = request_data.get("product")
-    department_name = request_data.get("department")
-    filters = request_data.get("filter", {})
-
-    payload = {
-        "product": product,
-        "filter": filters
+    params = {
+        "key": ITIGRIS_API_KEY,
+        "product": category
     }
 
-    if department_name and department_name in DEPARTMENTS:
-        payload["departmentId"] = DEPARTMENTS[department_name]
+    # Если указан департамент — добавляем фильтр
+    if department_name:
+        if department_name not in DEPARTMENTS:
+            return jsonify({"error": "Unknown department"}), 400
+        params["departmentId"] = DEPARTMENTS[department_name]
 
-    data = fetch_all_pages(payload)
+    response = requests.get(base_url, params=params)
 
-    return jsonify(data)
+    if response.status_code != 200:
+        return jsonify({
+            "error": "Itigris API error",
+            "status": response.status_code,
+            "details": response.text
+        }), response.status_code
 
+    data = response.json()
 
-@app.route("/remains/excel", methods=["POST"])
-def get_remains_excel():
-    request_data = request.json
-
-    product = request_data.get("product")
-    department_name = request_data.get("department")
-    filters = request_data.get("filter", {})
-
-    payload = {
-        "product": product,
-        "filter": filters
-    }
-
-    if department_name and department_name in DEPARTMENTS:
-        payload["departmentId"] = DEPARTMENTS[department_name]
-
-    data = fetch_all_pages(payload)
-
-    if isinstance(data, dict) and "error" in data:
-        return jsonify(data), data["status"]
+    if not data:
+        return jsonify({"message": "No data found"})
 
     df = pd.DataFrame(data)
+
+    # Добавляем читаемое название департамента
+    reverse_departments = {v: k for k, v in DEPARTMENTS.items()}
+    if "department" in df.columns:
+        df["department_name"] = df["department"].map(reverse_departments)
 
     output = io.BytesIO()
     df.to_excel(output, index=False)
@@ -102,15 +82,10 @@ def get_remains_excel():
 
     return send_file(
         output,
-        download_name="remains.xlsx",
-        as_attachment=True
+        as_attachment=True,
+        download_name="inventory.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-
-@app.route("/")
-def home():
-    return {"status": "Server is running"}
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(debug=True)
