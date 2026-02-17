@@ -33,14 +33,11 @@ DEPARTMENTS = {
 }
 
 def require_auth():
-    """
-    Проверяем, что пришёл правильный токен в заголовке.
-    """
-    # Если токен не задан в окружении — лучше сразу запретить доступ (чтобы не забыть включить защиту)
     if not ODL_SERVER_TOKEN:
         return False, ("Server token is not configured", 500)
 
-    provided = request.headers.get(AUTH_HEADER_NAME)
+    provided = request.args.get("token")  # теперь читаем из URL
+
     if not provided or provided != ODL_SERVER_TOKEN:
         return False, ("Forbidden", 403)
 
