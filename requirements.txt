@@ -1,5 +1,5 @@
-flask
-requests
-pandas
-openpyxl
-gunicorn
+fastapi
+uvicorn
+httpx
+pydantic
+xlsxwriter
