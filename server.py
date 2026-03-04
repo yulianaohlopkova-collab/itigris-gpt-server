@@ -591,4 +591,52 @@ async def count_all(
         group=group,
         limit_items=0,
     )
+@app.get("/breakdown/{category}")
+async def breakdown_category(
+    request: Request,
+    category: str,
+    department_name: Optional[str] = None
+):
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
 
+    cat = normalize_category(category)
+    if cat not in CATEGORY_FILTERS:
+        return JSONResponse({"error": "unknown_category"}, status_code=400)
+
+    dep_id = normalize_department(None, department_name)
+    dep_ids = [dep_id] if dep_id else list(DEPARTMENTS.values())
+
+    try:
+        rows = await fetch_optima_remains(cat, dep_ids, filter_payload=None)
+    except Exception as e:
+        return JSONResponse({"error": "upstream_error", "detail": str(e)}, status_code=502)
+
+    design = {}
+    type_ = {}
+    material = {}
+
+    for r in rows:
+        qty = int(r.get("amount", 0) or 0)
+
+        d = r.get("design")
+        t = r.get("type")
+        m = r.get("material")
+
+        if d:
+            design[d] = design.get(d, 0) + qty
+
+        if t:
+            type_[t] = type_.get(t, 0) + qty
+
+        if m:
+            material[m] = material.get(m, 0) + qty
+
+    return {
+        "category": cat,
+        "department": department_name,
+        "design": design,
+        "type": type_,
+        "material": material
+    }
