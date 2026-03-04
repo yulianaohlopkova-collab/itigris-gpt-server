@@ -642,9 +642,14 @@ async def breakdown_category(
     }
 @app.get("/gpt/breakdown/{category}")
 async def gpt_breakdown(
+    request: Request,
     category: str,
     department_name: Optional[str] = None
 ):
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
     cat = normalize_category(category)
 
     # Проверяем категорию
