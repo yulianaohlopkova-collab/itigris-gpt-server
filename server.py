@@ -643,7 +643,42 @@ async def breakdown_category(
 # --- GPT-friendly endpoints (no token in query) ---
 
 @app.get("/gpt/breakdown/{category}")
-@app.get("/gpt/breakdown/{category}")
-def gpt_breakdown(category: str, department_name: str | None = None):
-    return breakdown_category(category=category, department_name=department_name)
-    # add gpt breakdown endpoint
+async def gpt_breakdown(
+    category: str,
+    department_name: str | None = None
+):
+    cat = normalize_category(category)
+
+    dep_id = normalize_department(None, department_name)
+    dep_ids = [dep_id] if dep_id else list(DEPARTMENTS.values())
+
+    try:
+        rows = await fetch_optima_remains(cat, dep_ids, filter_payload=None)
+    except Exception as e:
+        return JSONResponse({"error": "upstream_error", "detail": str(e)}, status_code=502)
+
+    design = {}
+    type_ = {}
+    material = {}
+
+    for r in rows:
+        qty = int(r.get("amount", 0) or 0)
+
+        d = r.get("design")
+        t = r.get("type")
+        m = r.get("material")
+
+        if d:
+            design[d] = design.get(d, 0) + qty
+        if t:
+            type_[t] = type_.get(t, 0) + qty
+        if m:
+            material[m] = material.get(m, 0) + qty
+
+    return {
+        "category": cat,
+        "department": department_name,
+        "design": design,
+        "type": type_,
+        "material": material
+    }
