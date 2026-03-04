@@ -640,16 +640,26 @@ async def breakdown_category(
         "type": type_,
         "material": material
     }
-# --- GPT-friendly endpoints (no token in query) ---
-
 @app.get("/gpt/breakdown/{category}")
 async def gpt_breakdown(
     category: str,
-    department_name: str | None = None
+    department_name: Optional[str] = None
 ):
     cat = normalize_category(category)
 
+    # Проверяем категорию
+    if cat not in CATEGORY_FILTERS:
+        return JSONResponse({"error": "unknown_category"}, status_code=400)
+
+    # Определяем департамент
     dep_id = normalize_department(None, department_name)
+
+    # Если передали название отдела, но оно не распознано
+    if department_name and not dep_id:
+        return JSONResponse({"error": "unknown_department"}, status_code=400)
+
+    # Если департамент найден — используем его
+    # иначе берём все департаменты
     dep_ids = [dep_id] if dep_id else list(DEPARTMENTS.values())
 
     try:
@@ -670,8 +680,10 @@ async def gpt_breakdown(
 
         if d:
             design[d] = design.get(d, 0) + qty
+
         if t:
             type_[t] = type_.get(t, 0) + qty
+
         if m:
             material[m] = material.get(m, 0) + qty
 
