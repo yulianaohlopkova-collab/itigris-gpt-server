@@ -640,3 +640,9 @@ async def breakdown_category(
         "type": type_,
         "material": material
     }
+# --- GPT-friendly endpoints (no token in query) ---
+
+@app.get("/gpt/breakdown/{category}")
+def gpt_breakdown(category: str, department_name: str | None = None):
+    return breakdown_category(category=category, department_name=department_name, token=API_TOKEN)
+    # add gpt breakdown endpoint
