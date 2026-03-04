@@ -293,6 +293,15 @@ def openapi_json(request: Request):
         routes=app.routes,
         description="Optima Assistant API (protected)",
     )
+     # --- говорим GPT Actions, что нужна авторизация через query параметр token ---
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["OdlServerToken"] = {
+        "type": "apiKey",
+        "in": "query",
+        "name": "token",
+        "description": "ODL server token. Send as ?token=..."
+    }
+    schema["security"] = [{"OdlServerToken": []}]
     return JSONResponse(schema)
 
 @app.get("/docs", include_in_schema=False)
