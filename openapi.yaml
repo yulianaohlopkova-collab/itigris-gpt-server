@@ -1,0 +1,83 @@
+openapi: 3.1.0
+info:
+  title: Optima Assistant API
+  description: API для аналитики остатков оптики (Итигрис)
+  version: "2.2.0"
+
+servers:
+  - url: https://itigris-gpt-server.onrender.com
+
+paths:
+
+  /healthz:
+    get:
+      operationId: healthCheck
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server status
+
+  /breakdown/{category}:
+    get:
+      operationId: breakdownCategory
+      parameters:
+        - name: category
+          in: path
+          required: true
+          schema:
+            type: string
+
+        - name: department_name
+          in: query
+          required: false
+          schema:
+            type: string
+
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+
+      responses:
+        "200":
+          description: Breakdown of category
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /count/{category}:
+    get:
+      operationId: countCategory
+      parameters:
+        - name: category
+          in: path
+          required: true
+          schema:
+            type: string
+
+        - name: department_name
+          in: query
+          required: false
+          schema:
+            type: string
+
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+
+      responses:
+        "200":
+          description: Count of items
+          content:
+            application/json:
+              schema:
+                type: object
