@@ -293,8 +293,8 @@ def openapi_json(request: Request):
         routes=app.routes,
         description="Optima Assistant API (protected)",
     )
-    schema["servers"] = [
-    {"url": "https://itigris-gpt-server.onrender.com"}
+  schema["servers"] = [
+    {"url": "https://itigris-gpt-server.onrender.com?token=odl_super_secure_private_2026"}
 ]
      # --- говорим GPT Actions, что нужна авторизация через query параметр token ---
     schema.setdefault("components", {}).setdefault("securitySchemes", {})
