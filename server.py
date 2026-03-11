@@ -304,16 +304,16 @@ def openapi_json(request: Request):
         description="Optima Assistant API (protected)",
     )
 
-    schema["servers"] = [
-        {"url": "https://itigris-gpt-server.onrender.com?token=odl_super_secure_private_2026"}
+        schema["servers"] = [
+        {"url": "https://itigris-gpt-server.onrender.com"}
     ]
-     # --- говорим GPT Actions, что нужна авторизация через query параметр token ---
+
     schema.setdefault("components", {}).setdefault("securitySchemes", {})
     schema["components"]["securitySchemes"]["OdlServerToken"] = {
         "type": "apiKey",
-        "in": "query",
-        "name": "token",
-        "description": "ODL server token. Send as ?token=..."
+        "in": "header",
+        "name": "X-ODL-Token",
+        "description": "ODL server token. Send as header X-ODL-Token"
     }
     schema["security"] = [{"OdlServerToken": []}]
     return JSONResponse(schema)
