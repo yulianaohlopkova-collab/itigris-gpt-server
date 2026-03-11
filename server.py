@@ -596,7 +596,7 @@ async def count_by_price(
     }
 
 # -------- GET: просто "сколько штук" (без ценовых фильтров)
-@app.get("/count/{category}")
+@app.get("/count/{category}", response_model=dict)
 async def count_all(
     request: Request,
     category: str,
