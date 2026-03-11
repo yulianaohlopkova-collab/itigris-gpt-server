@@ -101,13 +101,22 @@ CATEGORY_ALIASES = {
 # =======================
 def require_auth_token(request: Request) -> Optional[JSONResponse]:
     if not ODL_SERVER_TOKEN:
-        return JSONResponse({"error": "Server token is not configured (ODL_SERVER_TOKEN)"}, status_code=500)
+        return JSONResponse(
+            {"error": "Server token is not configured (ODL_SERVER_TOKEN)"},
+            status_code=500
+        )
 
-    provided = request.query_params.get("token")
-    if not provided or provided != ODL_SERVER_TOKEN:
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    # 1) Сначала пробуем токен из заголовка
+    header_token = request.headers.get("x-odl-token")
+    if header_token == ODL_SERVER_TOKEN:
+        return None
 
-    return None
+    # 2) Потом пробуем старый вариант из URL
+    query_token = request.query_params.get("token")
+    if query_token == ODL_SERVER_TOKEN:
+        return None
+
+    return JSONResponse({"error": "Forbidden"}, status_code=403)
 
 # =======================
 # ХЕЛПЕРЫ
