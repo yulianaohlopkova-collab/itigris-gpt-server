@@ -304,7 +304,7 @@ def openapi_json(request: Request):
         description="Optima Assistant API (protected)",
     )
 
-        schema["servers"] = [
+    schema["servers"] = [
         {"url": "https://itigris-gpt-server.onrender.com"}
     ]
 
