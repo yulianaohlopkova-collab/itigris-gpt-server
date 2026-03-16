@@ -21,11 +21,93 @@ paths:
       responses:
         "200":
           description: Server status
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /departments:
+    get:
+      operationId: getDepartments
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of departments
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /categories:
+    get:
+      operationId: getCategories
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /count/{category}:
+    get:
+      operationId: countCategory
+      parameters:
+
+        - name: category
+          in: path
+          required: true
+          schema:
+            type: string
+
+        - name: department_id
+          in: query
+          required: false
+          schema:
+            type: integer
+
+        - name: department_name
+          in: query
+          required: false
+          schema:
+            type: string
+
+        - name: group
+          in: query
+          required: false
+          schema:
+            type: string
+
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+
+      responses:
+        "200":
+          description: Count of items
+          content:
+            application/json:
+              schema:
+                type: object
 
   /breakdown/{category}:
     get:
       operationId: breakdownCategory
       parameters:
+
         - name: category
           in: path
           required: true
@@ -52,10 +134,11 @@ paths:
               schema:
                 type: object
 
-  /count/{category}:
+  /gpt/breakdown/{category}:
     get:
-      operationId: countCategory
+      operationId: gptBreakdown
       parameters:
+
         - name: category
           in: path
           required: true
@@ -76,7 +159,7 @@ paths:
 
       responses:
         "200":
-          description: Count of items
+          description: GPT optimized breakdown
           content:
             application/json:
               schema:
