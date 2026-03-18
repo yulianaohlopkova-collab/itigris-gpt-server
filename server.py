@@ -296,7 +296,7 @@ def openapi_json(request: Request):
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
-        
+
     schema = get_openapi(
         title=app.title,
         version=app.version,
@@ -316,8 +316,181 @@ def openapi_json(request: Request):
         "description": "ODL server token. Send as header X-ODL-Token"
     }
     schema["security"] = [{"OdlServerToken": []}]
-    return JSONResponse(schema)
 
+    # --- PATCH FOR GPT ACTIONS ---
+
+    paths = schema.setdefault("paths", {})
+
+    # /departments
+    if "/departments" in paths and "get" in paths["/departments"]:
+        paths["/departments"]["get"]["summary"] = "List departments and aliases"
+        paths["/departments"]["get"]["description"] = (
+            "Use this only when the user explicitly asks to list departments. "
+            "For quantity questions prefer calling /count/{category} directly "
+            "with department_name."
+        )
+        paths["/departments"]["get"]["responses"]["200"] = {
+            "description": "Departments list",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "departments": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "id": {"type": "integer"}
+                                    },
+                                    "required": ["name", "id"]
+                                }
+                            },
+                            "aliases": {
+                                "type": "object",
+                                "additionalProperties": {"type": "integer"}
+                            }
+                        },
+                        "required": ["departments", "aliases"]
+                    }
+                }
+            }
+        }
+
+    # /count/{category}
+    if "/count/{category}" in paths and "get" in paths["/count/{category}"]:
+        paths["/count/{category}"]["get"]["summary"] = "Count items by category"
+        paths["/count/{category}"]["get"]["description"] = (
+            "For department-specific questions, prefer passing department_name directly. "
+            "Examples: department_name=Качели, department_name=Айсберг, department_name=в качелях. "
+            "Do not call /departments first unless the user explicitly asks to list departments."
+        )
+        paths["/count/{category}"]["get"]["parameters"] = [
+            {
+                "name": "category",
+                "in": "path",
+                "required": True,
+                "schema": {
+                    "type": "string",
+                    "enum": ["glasses", "sunglasses", "lenses", "contactlenses", "accessories"]
+                },
+                "description": "Product category code"
+            },
+            {
+                "name": "department_id",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "integer"},
+                "description": "Optional department ID"
+            },
+            {
+                "name": "department_name",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Preferred for GPT. Examples: Качели, Айсберг, Ленина, в качелях"
+            },
+            {
+                "name": "group",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Optional group: салоны, склады_ип, склады_ооо, цех"
+            }
+        ]
+        paths["/count/{category}"]["get"]["responses"]["200"] = {
+            "description": "Count result",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string"},
+                            "scope": {"type": "string"},
+                            "min_price": {"type": "number", "nullable": True},
+                            "max_price": {"type": "number", "nullable": True},
+                            "total_qty": {"type": "integer"},
+                            "total_value": {"type": "number"},
+                            "avg_price": {"type": "number"},
+                            "items": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "price": {"type": "number", "nullable": True},
+                                        "qty": {"type": "integer", "nullable": True},
+                                        "department": {
+                                            "anyOf": [
+                                                {"type": "integer"},
+                                                {"type": "string"},
+                                                {"type": "null"}
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "required": ["category", "scope", "total_qty", "total_value", "avg_price", "items"]
+                    }
+                }
+            }
+        }
+
+    # /gpt/breakdown/{category}
+    if "/gpt/breakdown/{category}" in paths and "get" in paths["/gpt/breakdown/{category}"]:
+        paths["/gpt/breakdown/{category}"]["get"]["summary"] = "GPT breakdown by category"
+        paths["/gpt/breakdown/{category}"]["get"]["description"] = (
+            "Use department_name directly if the user mentions a department."
+        )
+        paths["/gpt/breakdown/{category}"]["get"]["parameters"] = [
+            {
+                "name": "category",
+                "in": "path",
+                "required": True,
+                "schema": {
+                    "type": "string",
+                    "enum": ["glasses", "sunglasses", "lenses", "contactlenses", "accessories"]
+                }
+            },
+            {
+                "name": "department_name",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Examples: Качели, Айсберг, Ленина, в качелях"
+            }
+        ]
+        paths["/gpt/breakdown/{category}"]["get"]["responses"]["200"] = {
+            "description": "Breakdown result",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string"},
+                            "department": {"type": "string", "nullable": True},
+                            "design": {
+                                "type": "object",
+                                "additionalProperties": {"type": "integer"}
+                            },
+                            "type": {
+                                "type": "object",
+                                "additionalProperties": {"type": "integer"}
+                            },
+                            "material": {
+                                "type": "object",
+                                "additionalProperties": {"type": "integer"}
+                            }
+                        },
+                        "required": ["category", "design", "type", "material"]
+                    }
+                }
+            }
+        }
+
+    return JSONResponse(schema)
 @app.get("/docs", include_in_schema=False)
 def swagger_docs(request: Request):
     auth_err = require_auth_token(request)
