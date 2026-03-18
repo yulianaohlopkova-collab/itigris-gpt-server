@@ -880,7 +880,7 @@ async def remains_filtered(request: Request, body: RemainsFilteredRequest):
     items_limit = max(0, min(items_limit, 1000))
 
     normalized_filters = normalize_filters(cat, body.filters)
-fp = build_filter_payload(normalized_filters, body.min_price, body.max_price, body.price)
+    fp = build_filter_payload(normalized_filters, body.min_price, body.max_price, body.price)
     fp = fp if fp else None
 
     try:
