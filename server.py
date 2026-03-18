@@ -95,7 +95,205 @@ CATEGORY_ALIASES = {
     "контактные линзы": "contactlenses",
     "аксессуары": "accessories",
 }
+# =======================
+# КАТАЛОГ И АЛИАСЫ ФИЛЬТРОВ ДЛЯ GPT/ЧЕЛОВЕЧЕСКИХ ЗАПРОСОВ
+# =======================
+FILTER_CATALOG: Dict[str, Dict[str, List[str]]] = {
+    "glasses": {
+        "manufacturer": [
+            "DGO", "DJ", "DO", "HS Китай", "LF", "LG", "LINHAN", "LLN", "OG", "SR",
+            "TLG", "TTE", "TTK", "WLO", "ZG", "ZL",
+            "ИП Лепа Б.Н.",
+            "ООО АЛЬФА ОПТИКА",
+            "ООО Айлайкспекс",
+            "ООО АмурВижн",
+            "ООО БАЛЛЕТНАЯ ОПТИЧЕСКАЯ ГРУППА",
+            "ООО Виста",
+            "ООО Калита",
+            "ООО Компания Лаззаро",
+            "ООО Оптикус нова",
+            "ООО Пионер-оптик",
+            "ООО РИКО",
+            "ООО СОК",
+            "ООО Сафило СНГ",
+            "ООО ТФН",
+            "ОЧКИДАЛИНЗЫ",
+            "Оптический Мир",
+            "СанСити",
+        ],
+        "brand": [
+            "7TH STREET", "Alanie", "Assol", "BARBIE", "BERGEN", "BOSS", "Baosijie", "Bulget",
+            "CARRERA", "CHUKURUK", "Charm", "Corrado",
+            "DAVID BACKHAM", "Dacchi", "Danielle", "Diverona",
+            "ESTILO", "El nino", "Eligio", "Emma Moser", "Estelle",
+            "FABRICIO", "FERELLI", "Fiore", "Flavio", "Fleur", "Fly",
+            "GENNY", "GENTLE FAWN", "Genso",
+            "HAVVS", "HUGO BOSS",
+            "JOHN RICHMOND", "JOL", "Jacopo", "John Gray",
+            "KERE", "KYYS", "Kalita Junior",
+            "LUCIA VALDI", "Lazzaro", "LazzaroLuxe", "Leon", "Lina Latini",
+            "MARC JACOBS", "Mien", "Mila Mar",
+            "Nikitana",
+            "ODV", "Opal", "Opal Premium",
+            "PIERRE CARDIN", "POLAROID", "Penguin Baby", "Persona",
+            "Rebus", "Rockefeller",
+            "S.Pink", "SAREMO", "SEEON", "SWING", "Salivio", "Santarelli", "SeeMo", "Sonata", "Status",
+            "UNITY",
+            "VITO FABIUS", "Vizzini",
+            "X5",
+            "Калiта",
+        ],
+        "material": [
+            "металл",
+            "пластик",
+        ],
+        "type": [
+            "Безободковая",
+            "Ободковая",
+            "Полуободковая",
+        ],
+        "purpose": [
+            "Дет.",
+            "Жен.",
+            "Муж.",
+            "Под.",
+            "Уни.",
+        ],
+        "design": [
+            "Авиатор",
+            "Бабочка",
+            "Геометрическая",
+            "Квадрат",
+            "Кошачий глаз",
+            "Круг",
+            "Овал",
+            "Пантос",
+            "Прямоугольная",
+        ],
+    }
+}
 
+FILTER_FIELD_ALIASES: Dict[str, str] = {
+    "manufacturer": "manufacturer",
+    "производитель": "manufacturer",
+
+    "brand": "brand",
+    "бренд": "brand",
+
+    "material": "material",
+    "материал": "material",
+
+    "type": "type",
+    "тип": "type",
+
+    "purpose": "purpose",
+    "target": "purpose",
+    "целевая группа": "purpose",
+    "целевая_группа": "purpose",
+    "пол": "purpose",
+
+    "design": "design",
+    "дизайн": "design",
+    "форма": "design",
+}
+
+FILTER_VALUE_ALIASES: Dict[str, Dict[str, Dict[str, str]]] = {
+    "glasses": {
+        "manufacturer": {
+            "лепа б.н.": "ИП Лепа Б.Н.",
+            "альфа оптика": "ООО АЛЬФА ОПТИКА",
+            "айлайкспекс": "ООО Айлайкспекс",
+            "амурвижн": "ООО АмурВижн",
+            "баллетная оптическая группа": "ООО БАЛЛЕТНАЯ ОПТИЧЕСКАЯ ГРУППА",
+            "виста": "ООО Виста",
+            "калита": "ООО Калита",
+            "компания лаззаро": "ООО Компания Лаззаро",
+            "оптикус нова": "ООО Оптикус нова",
+            "пионер-оптик": "ООО Пионер-оптик",
+            "рико": "ООО РИКО",
+            "сок": "ООО СОК",
+            "сафило снг": "ООО Сафило СНГ",
+            "тфн": "ООО ТФН",
+            "очкидалинзы": "ОЧКИДАЛИНЗЫ",
+            "оптический мир": "Оптический Мир",
+            "сансити": "СанСити",
+        },
+        "material": {
+            "металл": "металл",
+            "металлические": "металл",
+            "металлическая": "металл",
+            "металлический": "металл",
+            "титан": "металл",
+            "титановые": "металл",
+            "титановая": "металл",
+            "титановый": "металл",
+
+            "пластик": "пластик",
+            "пластиковые": "пластик",
+            "пластиковая": "пластик",
+            "пластиковый": "пластик",
+        },
+        "type": {
+            "безободковая": "Безободковая",
+            "безободковые": "Безободковая",
+
+            "ободковая": "Ободковая",
+            "ободковые": "Ободковая",
+
+            "полуободковая": "Полуободковая",
+            "полуободковые": "Полуободковая",
+        },
+        "purpose": {
+            "детские": "Дет.",
+            "детская": "Дет.",
+            "детский": "Дет.",
+
+            "женские": "Жен.",
+            "женская": "Жен.",
+            "женский": "Жен.",
+
+            "мужские": "Муж.",
+            "мужская": "Муж.",
+            "мужской": "Муж.",
+
+            "подростковые": "Под.",
+            "подростковая": "Под.",
+            "подростковый": "Под.",
+
+            "унисекс": "Уни.",
+            "универсальные": "Уни.",
+            "универсальная": "Уни.",
+            "универсальный": "Уни.",
+        },
+        "design": {
+            "авиатор": "Авиатор",
+            "авиаторы": "Авиатор",
+
+            "бабочка": "Бабочка",
+            "бабочки": "Бабочка",
+
+            "геометрическая": "Геометрическая",
+            "геометрические": "Геометрическая",
+
+            "квадрат": "Квадрат",
+            "квадратные": "Квадрат",
+
+            "кошачий глаз": "Кошачий глаз",
+            "кошачий": "Кошачий глаз",
+
+            "круг": "Круг",
+            "круглые": "Круг",
+
+            "овал": "Овал",
+            "овальные": "Овал",
+
+            "пантос": "Пантос",
+
+            "прямоугольная": "Прямоугольная",
+            "прямоугольные": "Прямоугольная",
+        },
+    }
+}
 # =======================
 # AUTH (token в URL ?token=...)
 # =======================
@@ -166,7 +364,50 @@ def normalize_department(department_id: Optional[int] = None, department_name: O
             return v
 
     return None
+def normalize_filter_field_name(field: str) -> str:
+    return FILTER_FIELD_ALIASES.get(field.strip().lower(), field.strip().lower())
 
+def normalize_filter_value(category: str, field: str, value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    raw = value.strip()
+    if not raw:
+        return raw
+
+    norm_field = normalize_filter_field_name(field)
+
+    # 1) Сначала пробуем точное совпадение по каталогу без учета регистра
+    catalog_values = FILTER_CATALOG.get(category, {}).get(norm_field, [])
+    raw_low = raw.lower()
+    for canonical in catalog_values:
+        if raw_low == canonical.lower():
+            return canonical
+
+    # 2) Потом пробуем человеко-понятные алиасы
+    alias_map = FILTER_VALUE_ALIASES.get(category, {}).get(norm_field, {})
+    if raw_low in alias_map:
+        return alias_map[raw_low]
+
+    # 3) Если ничего не нашли — возвращаем как есть
+    return raw
+
+def normalize_filters(category: str, filters: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not filters:
+        return filters
+
+    normalized: Dict[str, Any] = {}
+    for field, value in filters.items():
+        norm_field = normalize_filter_field_name(field)
+
+        if isinstance(value, list):
+            normalized[norm_field] = [
+                normalize_filter_value(category, norm_field, item) for item in value
+            ]
+        else:
+            normalized[norm_field] = normalize_filter_value(category, norm_field, value)
+
+    return normalized
 def resolve_dep_ids(department_id: Optional[int], department_name: Optional[str], group: Optional[str]) -> List[int]:
     dep_id = normalize_department(department_id, department_name)
     if dep_id:
@@ -638,7 +879,8 @@ async def remains_filtered(request: Request, body: RemainsFilteredRequest):
     items_limit = body.items_limit if isinstance(body.items_limit, int) else (1000 if single_scope else 0)
     items_limit = max(0, min(items_limit, 1000))
 
-    fp = build_filter_payload(body.filters, body.min_price, body.max_price, body.price)
+    normalized_filters = normalize_filters(cat, body.filters)
+fp = build_filter_payload(normalized_filters, body.min_price, body.max_price, body.price)
     fp = fp if fp else None
 
     try:
@@ -682,7 +924,8 @@ async def count_by_filters(request: Request, body: RemainsFilteredRequest):
     except ValueError:
         return JSONResponse({"error": "unknown_group"}, status_code=400)
 
-    fp = build_filter_payload(body.filters, body.min_price, body.max_price, body.price)
+    normalized_filters = normalize_filters(cat, body.filters)
+fp = build_filter_payload(normalized_filters, body.min_price, body.max_price, body.price)
     fp = fp if fp else None
 
     try:
