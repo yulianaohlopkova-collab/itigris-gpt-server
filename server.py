@@ -645,18 +645,18 @@ async def fetch_report_page(payload: dict):
 
     url = f"https://optima.itigris.ru/{APP_NAME}/mainGoodsReport/reportPage"
 
-   headers = {
-    "Content-Type": "application/x-www-form-urlencoded",
-    "User-Agent": "Mozilla/5.0"
-}
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0"
+    }
 
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.post(url, data=payload, headers=headers)
 
-print("STATUS:", resp.status_code)
-print("TEXT:", resp.text[:1000])  # первые 1000 символов
+    print("STATUS:", resp.status_code)
+    print("TEXT:", resp.text[:1000])
 
-return resp.text
+    return resp.text
 
 # =======================
 # MODELS
