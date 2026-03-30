@@ -1073,20 +1073,20 @@ async def remains_filtered(request: Request, body: RemainsFilteredRequest):
     normalized_filters = normalize_filters(cat, body.filters)
     fp = build_filter_payload(normalized_filters, body.min_price, body.max_price, body.price)
     fp = fp if fp else None
+    
+        try:
+        rows = await fetch_optima_remains(cat, dep_ids, filter_payload=fp)
 
-   try:
-    rows = await fetch_optima_remains(cat, dep_ids, filter_payload=fp)
+        print("ROWS COUNT:", len(rows))
 
-    print("ROWS COUNT:", len(rows))
+        for r in rows[:5]:
+            print(r)
 
-    for r in rows[:5]:
-        print(r)
-
-except Exception as e:
-    return JSONResponse(
-        {"error": "upstream_error", "detail": str(e)},
-        status_code=502
-    )
+    except Exception as e:
+        return JSONResponse(
+            {"error": "upstream_error", "detail": str(e)},
+            status_code=502
+        )
 
     total_qty, total_value = sum_qty_value(rows)
     avg_price = (total_value / total_qty) if total_qty else 0.0
