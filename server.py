@@ -1074,7 +1074,7 @@ async def remains_filtered(request: Request, body: RemainsFilteredRequest):
     fp = build_filter_payload(normalized_filters, body.min_price, body.max_price, body.price)
     fp = fp if fp else None
     
-        try:
+    try:
         rows = await fetch_optima_remains(cat, dep_ids, filter_payload=fp)
 
         print("ROWS COUNT:", len(rows))
