@@ -567,7 +567,15 @@ def rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str = "Remains")
     return buf.getvalue()
 
 def sum_qty_value(rows: List[Dict[str, Any]]) -> Tuple[int, float]:
-    qty = sum(int(r.get("amount", 0) or 0) for r in rows)
+    qty = 0
+for r in rows:
+    a = r.get("amount")
+    if a is None:
+        continue
+    try:
+        qty += int(float(a))
+    except:
+        pass
     value = sum(float(r.get("price", 0) or 0) * int(r.get("amount", 0) or 0) for r in rows)
     return qty, value
 
