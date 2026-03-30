@@ -89,11 +89,35 @@ CATEGORY_FILTERS = {
 }
 
 CATEGORY_ALIASES = {
-    "оправы": "glasses", "оправа": "glasses", "frames": "glasses", "frame": "glasses",
-    "солнцезащитные": "sunglasses", "солнцезащитные очки": "sunglasses",
+    # Оправы
+    "оправы": "glasses",
+    "оправа": "glasses",
+    "frames": "glasses",
+    "frame": "glasses",
+
+    # Солнцезащитные
+    "солнцезащитные": "sunglasses",
+    "солнцезащитные очки": "sunglasses",
+    "сз": "sunglasses",
+    "солнце": "sunglasses",
+    "солнечные очки": "sunglasses",
+
+    # Линзы для очков
     "линзы": "lenses",
+    "очковые линзы": "lenses",
+    "стекла": "lenses",
+    "стекло": "lenses",
+
+    # Контактные линзы
     "контактные линзы": "contactlenses",
+    "контактные": "contactlenses",
+    "контакты": "contactlenses",
+    "кл": "contactlenses",
+
+    # Аксессуары
     "аксессуары": "accessories",
+    "аксессуар": "accessories",
+}
 }
 # =======================
 # КАТАЛОГ И АЛИАСЫ ФИЛЬТРОВ ДЛЯ GPT/ЧЕЛОВЕЧЕСКИХ ЗАПРОСОВ
@@ -170,7 +194,59 @@ FILTER_CATALOG: Dict[str, Dict[str, List[str]]] = {
             "Пантос",
             "Прямоугольная",
         ],
-    }
+    },
+
+    "sunglasses": {
+        "manufacturer": [],
+        "brand": [],
+        "model": [],
+        "color": [],
+        "purpose": [],
+        "material": [],
+        "type": [],
+        "lensType": [],
+        "design": [],
+    },
+
+    "lenses": {
+        "manufacturer": [],
+        "brand": [],
+        "index": [],
+        "cover": [],
+        "color": [],
+        "diameter": [],
+        "material": [],
+        "geometry": [],
+        "lensType": [],
+        "lensClass": [],
+        "technology": [],
+        "dioptre": [],
+        "cylinder": [],
+        "add": [],
+    },
+
+    "contactlenses": {
+        "manufacturer": [],
+        "name": [],
+        "color": [],
+        "radius": [],
+        "diameter": [],
+        "dioptre": [],
+        "cylinder": [],
+        "axis": [],
+        "add": [],
+        "wearingPeriod": [],
+        "inPack": [],
+    },
+
+    "accessories": {
+        "manufacturer": [],
+        "brand": [],
+        "model": [],
+        "color": [],
+        "material": [],
+        "type": [],
+    },
 }
 
 FILTER_FIELD_ALIASES: Dict[str, str] = {
@@ -179,6 +255,11 @@ FILTER_FIELD_ALIASES: Dict[str, str] = {
 
     "brand": "brand",
     "бренд": "brand",
+
+    "model": "model",
+    "модель": "model",
+    "name": "name",
+    "название": "name",
 
     "material": "material",
     "материал": "material",
@@ -195,6 +276,52 @@ FILTER_FIELD_ALIASES: Dict[str, str] = {
     "design": "design",
     "дизайн": "design",
     "форма": "design",
+
+    "color": "color",
+    "цвет": "color",
+
+    "lensType": "lensType",
+    "тип линзы": "lensType",
+
+    "index": "index",
+    "индекс": "index",
+
+    "cover": "cover",
+    "покрытие": "cover",
+
+    "diameter": "diameter",
+    "диаметр": "diameter",
+
+    "radius": "radius",
+    "радиус": "radius",
+
+    "dioptre": "dioptre",
+    "диоптрии": "dioptre",
+    "диоптрия": "dioptre",
+
+    "cylinder": "cylinder",
+    "цилиндр": "cylinder",
+
+    "axis": "axis",
+    "ось": "axis",
+
+    "add": "add",
+    "аддидация": "add",
+
+    "wearingPeriod": "wearingPeriod",
+    "срок ношения": "wearingPeriod",
+
+    "inPack": "inPack",
+    "в упаковке": "inPack",
+
+    "geometry": "geometry",
+    "геометрия": "geometry",
+
+    "lensClass": "lensClass",
+    "класс линзы": "lensClass",
+
+    "technology": "technology",
+    "технология": "technology",
 }
 
 FILTER_VALUE_ALIASES: Dict[str, Dict[str, Dict[str, str]]] = {
