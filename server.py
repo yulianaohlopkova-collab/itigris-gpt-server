@@ -1076,6 +1076,11 @@ async def remains_filtered(request: Request, body: RemainsFilteredRequest):
 
     try:
         rows = await fetch_optima_remains(cat, dep_ids, filter_payload=fp)
+
+print("ROWS COUNT:", len(rows))
+
+for r in rows[:5]:
+    print(r)
     except Exception as e:
         return JSONResponse({"error": "upstream_error", "detail": str(e)}, status_code=502)
 
