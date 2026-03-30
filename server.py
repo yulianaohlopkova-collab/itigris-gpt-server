@@ -923,11 +923,24 @@ async def test_report(request: Request):
 
     payload = {
         "date": "30.03.2026",
+
         "department": "1000000021",
+        "department_input0": "Ленина, 7",
+
         "reportType": "Контактные линзы",
+        "reportType_input0": "Контактные линзы",
+
         "priceType": "Розничная",
+        "priceType_input0": "Розничная",
+
         "groupByDepartment": "true",
-        "companyUUID": "odl"
+        "groupByDepartment_input0": "По департаменту и параметрам",
+
+        "companyUUID": "odl",
+
+        "userId": "1000000206",
+        "uuidValue": "c1ae1aff-4cb3-4f46-96c8-9e0ea2f6264f",
+        "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
     }
 
     html = await fetch_report_page(payload)
