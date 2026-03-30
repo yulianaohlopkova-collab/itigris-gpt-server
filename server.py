@@ -639,6 +639,23 @@ async def fetch_optima_remains(
             all_rows.extend(rows)
             page += 1
     return all_rows
+async def fetch_report_page(payload: dict):
+    if not API_KEY:
+        raise RuntimeError("ITIGRIS_API_KEY is not configured")
+
+    url = f"https://optima.itigris.ru/{APP_NAME}/mainGoodsReport/reportPage"
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.post(url, data=payload, headers=headers)
+
+        if resp.status_code != 200:
+            raise RuntimeError(f"Report error {resp.status_code}: {resp.text}")
+
+        return resp.text  # HTML!
 
 # =======================
 # MODELS
@@ -898,7 +915,24 @@ def categories(request: Request):
     if auth_err:
         return auth_err
     return {"codes": list(CATEGORY_FILTERS.keys()), "aliases": CATEGORY_ALIASES}
+@app.get("/test-report")
+async def test_report(request: Request):
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
 
+    payload = {
+        "date": "30.03.2026",
+        "department": "1000000021",
+        "reportType": "Контактные линзы",
+        "priceType": "Розничная",
+        "groupByDepartment": "true",
+        "companyUUID": "odl"
+    }
+
+    html = await fetch_report_page(payload)
+
+    return HTMLResponse(content=html)
 # -------- Excel: один департамент
 @app.get("/remains/{category}")
 async def remains_one_department(
