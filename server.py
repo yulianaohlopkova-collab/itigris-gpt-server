@@ -1083,7 +1083,10 @@ async def remains_filtered(request: Request, body: RemainsFilteredRequest):
         print(r)
 
 except Exception as e:
-    return JSONResponse({"error": "upstream_error", "detail": str(e)}, status_code=502)
+    return JSONResponse(
+        {"error": "upstream_error", "detail": str(e)},
+        status_code=502
+    )
 
     total_qty, total_value = sum_qty_value(rows)
     avg_price = (total_value / total_qty) if total_qty else 0.0
