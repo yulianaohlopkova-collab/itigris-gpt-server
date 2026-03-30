@@ -643,7 +643,7 @@ async def fetch_report_page(payload: dict):
     if not API_KEY:
         raise RuntimeError("ITIGRIS_API_KEY is not configured")
 
-    url = f"https://optima.itigris.ru/{APP_NAME}/mainGoodsReport/reportPage"
+    url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
