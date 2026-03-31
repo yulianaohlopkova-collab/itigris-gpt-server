@@ -1292,37 +1292,37 @@ async def count_real(
 
     total_qty = None
 
-for table in tables:
-    rows = table.find_all("tr")
-    for row in rows:
-        cols = row.find_all("td")
-        if not cols:
-            continue
+    for table in tables:
+        rows = table.find_all("tr")
+        for row in rows:
+            cols = row.find_all("td")
+            if not cols:
+                continue
 
-        row_text = " ".join([c.get_text(strip=True) for c in cols]).lower()
+            row_text = " ".join([c.get_text(strip=True) for c in cols]).lower()
 
-        if "итого" in row_text or "всего" in row_text:
-            for c in cols:
-                val = c.get_text(strip=True).replace(" ", "")
-                if val.isdigit():
-                    total_qty = int(val)
-                    break
+            if "итого" in row_text or "всего" in row_text:
+                for c in cols:
+                    val = c.get_text(strip=True).replace(" ", "")
+                    if val.isdigit():
+                        total_qty = int(val)
+                        break
 
-    if total_qty is not None:
-        break
+            if total_qty is not None:
+                break
 
-# ❗ ВОТ ЭТИ ДВЕ ШТУКИ ДОЛЖНЫ БЫТЬ СНАРУЖИ ЦИКЛА
+        if total_qty is not None:
+            break
 
-if total_qty is None:
-    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+    if total_qty is None:
+        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
 
-return {
-    "category": cat,
-    "department": department_name,
-    "total_qty": total_qty,
-    "source": "reportPage"
-}
-    
+    return {
+        "category": cat,
+        "department": department_name,
+        "total_qty": total_qty,
+        "source": "reportPage"
+    }
 @app.get("/breakdown/{category}")
 async def breakdown_category(
     request: Request,
