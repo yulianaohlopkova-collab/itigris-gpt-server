@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
+import httpx
 
 # =======================
 # APP (docs/openapi отключены, мы добавим их вручную с токеном)
@@ -961,9 +962,6 @@ async def test_report(request: Request):
     "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
 }
 
-    html = await fetch_report_page(payload)
-
-    return HTMLResponse(content=html)
 # -------- Excel: один департамент
 @app.get("/remains/{category}")
 async def remains_one_department(
@@ -1281,12 +1279,26 @@ async def count_real(
         "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
     }
 
-    html = await fetch_report_page(payload)
+url = "https://optima.itigris.ru/odl/remoteRemains/list"
 
-    if "логин" in html.lower() or "пароль" in html.lower():
-        return HTMLResponse(content=html)
+params = {
+    "key": "5cb4b9ac-a667-47b9-b6ff-ad5fc4395759",
+    "product": cat
+}
 
-    return HTMLResponse(content=html)
+async with httpx.AsyncClient() as client:
+    response = await client.get(url, params=params)
+
+data = response.json()
+
+total_qty = sum(item.get("amount", 0) for item in data)
+
+return {
+    "category": cat,
+    "department": department_name,
+    "total_qty": total_qty,
+    "source": "remoteRemains"
+}
     
 @app.get("/breakdown/{category}")
 async def breakdown_category(
