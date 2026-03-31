@@ -1251,7 +1251,10 @@ async def count_real(
 
     dep_id = normalize_department(None, department_name)
     if not dep_id:
-        return JSONResponse({"error": "unknown_department"}, status_code=400)
+    return JSONResponse({
+        "error": "missing_department",
+        "hint": "Укажи department_name, например Ленина"
+    }, status_code=400)
 
     REPORT_TYPE_MAP = {
         "contactlenses": "Контактные линзы",
