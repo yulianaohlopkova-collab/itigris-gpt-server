@@ -1239,7 +1239,7 @@ async def count_real(
     category: str,
     department_name: Optional[str] = None
 ):
-    from bs4 import BeautifulSoup
+    import httpx
 
     auth_err = require_auth_token(request)
     if auth_err:
@@ -1254,51 +1254,26 @@ async def count_real(
             "hint": "Укажи department_name, например Ленина"
         }, status_code=400)
 
-    REPORT_TYPE_MAP = {
-        "contactlenses": "Контактные линзы",
-        "lenses": "Линзы",
-        "glasses": "Оправы",
-        "sunglasses": "Солнцезащитные очки",
+    url = "https://optima.itigris.ru/odl/remoteRemains/list"
+
+    params = {
+        "key": "5cb4b9ac-a667-47b9-b6ff-ad5fc4395759",
+        "product": cat
     }
 
-    report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
 
-    payload = {
-        "date": "30.03.2026",
-        "department": str(dep_id),
-        "department_input0": department_name,
-        "reportType": report_type,
-        "reportType_input0": report_type,
-        "priceType": "Розничная",
-        "priceType_input0": "Розничная",
-        "groupByDepartment": "true",
-        "groupByDepartment_input0": "По департаменту и параметрам",
-        "companyUUID": APP_NAME,
-        "userId": "1000000206",
-        "uuidValue": "c1ae1aff-4cb3-4f46-96c8-9e0ea2f6264f",
-        "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
+    data = response.json()
+
+    total_qty = sum(item.get("amount", 0) for item in data)
+
+    return {
+        "category": cat,
+        "department": department_name,
+        "total_qty": total_qty,
+        "source": "remoteRemains"
     }
-
-url = "https://optima.itigris.ru/odl/remoteRemains/list"
-
-params = {
-    "key": "5cb4b9ac-a667-47b9-b6ff-ad5fc4395759",
-    "product": cat
-}
-
-async with httpx.AsyncClient() as client:
-    response = await client.get(url, params=params)
-
-data = response.json()
-
-total_qty = sum(item.get("amount", 0) for item in data)
-
-return {
-    "category": cat,
-    "department": department_name,
-    "total_qty": total_qty,
-    "source": "remoteRemains"
-}
     
 @app.get("/breakdown/{category}")
 async def breakdown_category(
