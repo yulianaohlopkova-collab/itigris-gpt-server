@@ -3,4 +3,5 @@ uvicorn
 httpx
 pydantic
 xlsxwriter
+bs4
 beautifulsoup4
