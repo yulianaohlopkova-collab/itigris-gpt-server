@@ -1284,37 +1284,30 @@ if not dep_id:
         "userId": "1000000206",
         "uuidValue": "c1ae1aff-4cb3-4f46-96c8-9e0ea2f6264f",
         "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
-    }
-
-    html = await fetch_report_page(payload)
-
-    print("HTML RESPONSE START")
-    print(html[:1000])
-    print("HTML RESPONSE END")
-
+        
     soup = BeautifulSoup(html, "html.parser")
-   tables = soup.find_all("table")
+    tables = soup.find_all("table")
 
-total_qty = None
+    total_qty = None
 
-for table in tables:
-    rows = table.find_all("tr")
-    for row in rows:
-        cols = row.find_all("td")
-        if not cols:
-            continue
+    for table in tables:
+        rows = table.find_all("tr")
+        for row in rows:
+            cols = row.find_all("td")
+            if not cols:
+                continue
 
-        row_text = " ".join([c.get_text(strip=True) for c in cols])
+            row_text = " ".join([c.get_text(strip=True) for c in cols])
 
-        if "Итого" in row_text:
-            for c in cols:
-                val = c.get_text(strip=True).replace(" ", "")
-                if val.isdigit():
-                    total_qty = int(val)
-                    break
+            if "Итого" in row_text:
+                for c in cols:
+                    val = c.get_text(strip=True).replace(" ", "")
+                    if val.isdigit():
+                        total_qty = int(val)
+                        break
 
-if total_qty is None:
-    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+    if total_qty is None:
+        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
 
     return {
         "category": cat,
