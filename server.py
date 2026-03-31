@@ -1282,8 +1282,11 @@ async def count_real(
     }
 
     html = await fetch_report_page(payload)
-    
+
+if "логин" in html.lower() or "пароль" in html.lower():
     return HTMLResponse(content=html)
+
+return HTMLResponse(content=html)
     
 @app.get("/breakdown/{category}")
 async def breakdown_category(
