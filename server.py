@@ -8,7 +8,6 @@ from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
-from bs4 import BeautifulSoup
 
 # =======================
 # APP (docs/openapi отключены, мы добавим их вручную с токеном)
@@ -1238,6 +1237,7 @@ async def count_real(
     category: str,
     department_name: Optional[str] = None
 ):
+    from bs4 import BeautifulSoup
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
