@@ -1264,7 +1264,6 @@ if not dep_id:
     }
 
     report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
-
     payload = {
         "date": "30.03.2026",
         "department": str(dep_id),
@@ -1284,7 +1283,7 @@ if not dep_id:
         "userId": "1000000206",
         "uuidValue": "c1ae1aff-4cb3-4f46-96c8-9e0ea2f6264f",
         "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
-        
+}
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")
 
