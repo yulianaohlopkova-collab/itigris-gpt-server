@@ -789,7 +789,7 @@ def openapi_json(request: Request):
             {
                 "name": "department_name",
                 "in": "query",
-                "required": False,
+                "required": True,
                 "schema": {"type": "string"},
                 "description": "Preferred for GPT. Examples: Качели, Айсберг, Ленина, в качелях"
             },
