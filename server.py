@@ -1250,11 +1250,11 @@ async def count_real(
     cat = normalize_category(category)
 
     dep_id = normalize_department(None, department_name)
-    if not dep_id:
+if not dep_id:
     return JSONResponse({
         "error": "missing_department",
         "hint": "Укажи department_name, например Ленина"
-    }, status_code=400)
+    }, status_code=400))
 
     REPORT_TYPE_MAP = {
         "contactlenses": "Контактные линзы",
@@ -1293,15 +1293,28 @@ async def count_real(
     print("HTML RESPONSE END")
 
     soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text()
+   tables = soup.find_all("table")
 
-    import re
-    numbers = re.findall(r"\d+", text)
+total_qty = None
 
-    if not numbers:
-        return JSONResponse({"error": "cannot_parse"}, status_code=500)
+for table in tables:
+    rows = table.find_all("tr")
+    for row in rows:
+        cols = row.find_all("td")
+        if not cols:
+            continue
 
-    total_qty = int(numbers[-1])
+        row_text = " ".join([c.get_text(strip=True) for c in cols])
+
+        if "Итого" in row_text:
+            for c in cols:
+                val = c.get_text(strip=True).replace(" ", "")
+                if val.isdigit():
+                    total_qty = int(val)
+                    break
+
+if total_qty is None:
+    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
 
     return {
         "category": cat,
