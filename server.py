@@ -1318,14 +1318,7 @@ async def breakdown_category(
         return auth_err
 
     cat = normalize_category(category)
-    REPORT_TYPE_MAP = {
-    "contactlenses": "Контактные линзы",
-    "lenses": "Линзы",
-    "glasses": "Оправы",
-    "sunglasses": "Солнцезащитные очки",
-}
 
-report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
     if cat not in CATEGORY_FILTERS:
         return JSONResponse({"error": "unknown_category"}, status_code=400)
 
