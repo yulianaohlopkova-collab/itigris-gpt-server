@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
+from bs4 import BeautifulSoup
 
 # =======================
 # APP (docs/openapi отключены, мы добавим их вручную с токеном)
@@ -1230,6 +1231,63 @@ async def count_all(
         group=group,
         limit_items=0,
     )
+
+@app.get("/count-real/{category}")
+async def count_real(
+    request: Request,
+    category: str,
+    department_name: Optional[str] = None
+):
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    cat = normalize_category(category)
+
+    dep_id = normalize_department(None, department_name)
+    if not dep_id:
+        return JSONResponse({"error": "unknown_department"}, status_code=400)
+
+    payload = {
+        "date": "30.03.2026",
+        "department": str(dep_id),
+        "department_input0": department_name,
+
+        "reportType": "Контактные линзы",
+        "reportType_input0": "Контактные линзы",
+
+        "priceType": "Розничная",
+        "priceType_input0": "Розничная",
+
+        "groupByDepartment": "true",
+        "groupByDepartment_input0": "По департаменту и параметрам",
+
+        "companyUUID": APP_NAME,
+
+        "userId": "1000000206",
+        "uuidValue": "c1ae1aff-4cb3-4f46-96c8-9e0ea2f6264f",
+        "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
+    }
+
+    html = await fetch_report_page(payload)
+
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text()
+
+    import re
+    match = re.search(r"Итого.*?(\d+)", text)
+
+    if not match:
+        return JSONResponse({"error": "cannot_parse"}, status_code=500)
+
+    total_qty = int(match.group(1))
+
+    return {
+        "category": cat,
+        "department": department_name,
+        "total_qty": total_qty,
+        "source": "reportPage"
+    }
 @app.get("/breakdown/{category}")
 async def breakdown_category(
     request: Request,
