@@ -1282,47 +1282,9 @@ async def count_real(
     }
 
     html = await fetch_report_page(payload)
-
-    print("HTML RESPONSE START")
-    print(html[:1000])
-    print("HTML RESPONSE END")
-
-    soup = BeautifulSoup(html, "html.parser")
-    tables = soup.find_all("table")
-
-    total_qty = None
-
-    for table in tables:
-        rows = table.find_all("tr")
-        for row in rows:
-            cols = row.find_all("td")
-            if not cols:
-                continue
-
-            row_text = " ".join([c.get_text(strip=True) for c in cols]).lower()
-
-            if "итого" in row_text or "всего" in row_text:
-                for c in cols:
-                    val = c.get_text(strip=True).replace(" ", "")
-                    if val.isdigit():
-                        total_qty = int(val)
-                        break
-
-            if total_qty is not None:
-                break
-
-        if total_qty is not None:
-            break
-
-    if total_qty is None:
-        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
-
-    return {
-        "category": cat,
-        "department": department_name,
-        "total_qty": total_qty,
-        "source": "reportPage"
-    }
+    
+    return HTMLResponse(content=html)
+    
 @app.get("/breakdown/{category}")
 async def breakdown_category(
     request: Request,
