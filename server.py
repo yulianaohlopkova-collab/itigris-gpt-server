@@ -1275,9 +1275,9 @@ async def count_real(
 
     html = await fetch_report_page(payload)
 
-print("HTML RESPONSE START")
-print(html[:1000])
-print("HTML RESPONSE END")
+    print("HTML RESPONSE START")
+    print(html[:1000])
+    print("HTML RESPONSE END")
 
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text()
