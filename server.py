@@ -1301,7 +1301,7 @@ if not numbers:
 # берём самое большое число
 total_qty = max([int(n) for n in numbers])
 
-    if total_qty is None:
+if total_qty is None:
         return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
 
     return {
