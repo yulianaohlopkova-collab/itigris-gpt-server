@@ -1242,6 +1242,7 @@ async def count_real(
     department_name: Optional[str] = None
 ):
     from bs4 import BeautifulSoup
+
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
@@ -1251,15 +1252,17 @@ async def count_real(
     dep_id = normalize_department(None, department_name)
     if not dep_id:
         return JSONResponse({"error": "unknown_department"}, status_code=400)
-REPORT_TYPE_MAP = {
-    "contactlenses": "Контактные линзы",
-    "lenses": "Линзы",
-    "glasses": "Оправы",
-    "sunglasses": "Солнцезащитные очки",
-}
 
-report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
-payload = {
+    REPORT_TYPE_MAP = {
+        "contactlenses": "Контактные линзы",
+        "lenses": "Линзы",
+        "glasses": "Оправы",
+        "sunglasses": "Солнцезащитные очки",
+    }
+
+    report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
+
+    payload = {
         "date": "30.03.2026",
         "department": str(dep_id),
         "department_input0": department_name,
@@ -1280,23 +1283,22 @@ payload = {
         "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
     }
 
-    
-html = await fetch_report_page(payload)
+    html = await fetch_report_page(payload)
 
-print("HTML RESPONSE START")
-print(html[:1000])
-print("HTML RESPONSE END")
+    print("HTML RESPONSE START")
+    print(html[:1000])
+    print("HTML RESPONSE END")
 
-soup = BeautifulSoup(html, "html.parser")
-text = soup.get_text()
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text()
 
-import re
-numbers = re.findall(r"\d+", text)
+    import re
+    numbers = re.findall(r"\d+", text)
 
-if not numbers:
-    return JSONResponse({"error": "cannot_parse"}, status_code=500)
+    if not numbers:
+        return JSONResponse({"error": "cannot_parse"}, status_code=500)
 
-total_qty = int(numbers[-1])
+    total_qty = int(numbers[-1])
 
     return {
         "category": cat,
