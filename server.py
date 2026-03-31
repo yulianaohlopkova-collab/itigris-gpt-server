@@ -1303,7 +1303,7 @@ total_qty = max([int(n) for n in numbers])
 
 if total_qty is None:
         return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
-return {
+    return {
         "category": cat,
         "department": department_name,
         "total_qty": total_qty,
