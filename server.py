@@ -1290,26 +1290,16 @@ async def count_real(
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")
 
-    total_qty = None
+    text = soup.get_text()
 
-    for table in tables:
-        rows = table.find_all("tr")
-        for row in rows:
-            cols = row.find_all("td")
-            if not cols:
-                continue
+import re
+numbers = re.findall(r"\d+", text)
 
-            row_text = " ".join([c.get_text(strip=True) for c in cols])
+if not numbers:
+    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
 
-            if "итого" in row_text.lower() or "всего" in row_text.lower():
-                for c in cols:
-                    val = c.get_text(strip=True).replace(" ", "")
-                    if val.isdigit():
-                        total_qty = int(val)
-                        break
-
-        if total_qty is not None:
-            break
+# берём самое большое число
+total_qty = max([int(n) for n in numbers])
 
     if total_qty is None:
         return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
