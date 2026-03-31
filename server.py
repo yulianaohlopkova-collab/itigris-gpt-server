@@ -1301,7 +1301,7 @@ async def count_real(
 
             row_text = " ".join([c.get_text(strip=True) for c in cols])
 
-            if "итого" in row_text.lower():
+            if "итого" in row_text.lower() or "всего" in row_text.lower():
                 for c in cols:
                     val = c.get_text(strip=True).replace(" ", "")
                     if val.isdigit():
