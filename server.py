@@ -1254,7 +1254,7 @@ if not dep_id:
     return JSONResponse({
         "error": "missing_department",
         "hint": "Укажи department_name, например Ленина"
-    }, status_code=400))
+    }, status_code=400)
 
     REPORT_TYPE_MAP = {
         "contactlenses": "Контактные линзы",
