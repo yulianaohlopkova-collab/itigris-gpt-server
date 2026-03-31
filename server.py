@@ -1290,26 +1290,38 @@ async def count_real(
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")
 
-    text = soup.get_text()
+    total_qty = None
 
-    import re
-    numbers = re.findall(r"\d+", text)
+for table in tables:
+    rows = table.find_all("tr")
+    for row in rows:
+        cols = row.find_all("td")
+        if not cols:
+            continue
 
-    if not numbers:
-        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+        row_text = " ".join([c.get_text(strip=True) for c in cols]).lower()
 
-    # берём самое большое число
-    total_qty = max([int(n) for n in numbers])
+        if "итого" in row_text or "всего" in row_text:
+            for c in cols:
+                val = c.get_text(strip=True).replace(" ", "")
+                if val.isdigit():
+                    total_qty = int(val)
+                    break
 
-    if total_qty is None:
-        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+    if total_qty is not None:
+        break
 
-    return {
-        "category": cat,
-        "department": department_name,
-        "total_qty": total_qty,
-        "source": "reportPage"
-    }
+# ❗ ВОТ ЭТИ ДВЕ ШТУКИ ДОЛЖНЫ БЫТЬ СНАРУЖИ ЦИКЛА
+
+if total_qty is None:
+    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+
+return {
+    "category": cat,
+    "department": department_name,
+    "total_qty": total_qty,
+    "source": "reportPage"
+}
     
 @app.get("/breakdown/{category}")
 async def breakdown_category(
