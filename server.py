@@ -1292,24 +1292,24 @@ async def count_real(
 
     text = soup.get_text()
 
-import re
-numbers = re.findall(r"\d+", text)
+    import re
+    numbers = re.findall(r"\d+", text)
 
-if not numbers:
-    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+    if not numbers:
+        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
 
-# берём самое большое число
-total_qty = max([int(n) for n in numbers])
+    # берём самое большое число
+    total_qty = max([int(n) for n in numbers])
 
-if total_qty is None:
-    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+    if total_qty is None:
+        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
 
-return {
-    "category": cat,
-    "department": department_name,
-    "total_qty": total_qty,
-    "source": "reportPage"
-}
+    return {
+        "category": cat,
+        "department": department_name,
+        "total_qty": total_qty,
+        "source": "reportPage"
+    }
     
 @app.get("/breakdown/{category}")
 async def breakdown_category(
