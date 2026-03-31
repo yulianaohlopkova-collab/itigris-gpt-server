@@ -1302,13 +1302,14 @@ if not numbers:
 total_qty = max([int(n) for n in numbers])
 
 if total_qty is None:
-        return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
-    return {
-        "category": cat,
-        "department": department_name,
-        "total_qty": total_qty,
-        "source": "reportPage"
-    }
+    return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
+
+return {
+    "category": cat,
+    "department": department_name,
+    "total_qty": total_qty,
+    "source": "reportPage"
+}
     
 @app.get("/breakdown/{category}")
 async def breakdown_category(
