@@ -1280,13 +1280,14 @@ payload = {
         "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
     }
 
-    html = await fetch_report_page(payload)
+    
+html = await fetch_report_page(payload)
 
-    print("HTML RESPONSE START")
-    print(html[:1000])
-    print("HTML RESPONSE END")
+print("HTML RESPONSE START")
+print(html[:1000])
+print("HTML RESPONSE END")
 
-    soup = BeautifulSoup(html, "html.parser")
+soup = BeautifulSoup(html, "html.parser")
 text = soup.get_text()
 
 import re
