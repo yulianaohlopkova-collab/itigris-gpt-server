@@ -1251,14 +1251,21 @@ async def count_real(
     dep_id = normalize_department(None, department_name)
     if not dep_id:
         return JSONResponse({"error": "unknown_department"}, status_code=400)
+REPORT_TYPE_MAP = {
+    "contactlenses": "Контактные линзы",
+    "lenses": "Линзы",
+    "glasses": "Оправы",
+    "sunglasses": "Солнцезащитные очки",
+}
 
+report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
     payload = {
         "date": "30.03.2026",
         "department": str(dep_id),
         "department_input0": department_name,
 
-        "reportType": "Контактные линзы",
-        "reportType_input0": "Контактные линзы",
+        "reportType": report_type,
+        "reportType_input0": report_type,
 
         "priceType": "Розничная",
         "priceType_input0": "Розничная",
@@ -1280,15 +1287,15 @@ async def count_real(
     print("HTML RESPONSE END")
 
     soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text()
+text = soup.get_text()
 
-    import re
-    match = re.search(r"Итого.*?(\d+)", text)
+import re
+numbers = re.findall(r"\d+", text)
 
-    if not match:
-        return JSONResponse({"error": "cannot_parse"}, status_code=500)
+if not numbers:
+    return JSONResponse({"error": "cannot_parse"}, status_code=500)
 
-    total_qty = int(match.group(1))
+total_qty = int(numbers[-1])
 
     return {
         "category": cat,
@@ -1307,6 +1314,14 @@ async def breakdown_category(
         return auth_err
 
     cat = normalize_category(category)
+    REPORT_TYPE_MAP = {
+    "contactlenses": "Контактные линзы",
+    "lenses": "Линзы",
+    "glasses": "Оправы",
+    "sunglasses": "Солнцезащитные очки",
+}
+
+report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
     if cat not in CATEGORY_FILTERS:
         return JSONResponse({"error": "unknown_category"}, status_code=400)
 
