@@ -1259,7 +1259,7 @@ REPORT_TYPE_MAP = {
 }
 
 report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
-    payload = {
+payload = {
         "date": "30.03.2026",
         "department": str(dep_id),
         "department_input0": department_name,
