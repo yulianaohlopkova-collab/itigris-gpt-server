@@ -1306,6 +1306,7 @@ async def count_real(
         "total_qty": total_qty,
         "source": "reportPage"
     }
+    
 @app.get("/breakdown/{category}")
 async def breakdown_category(
     request: Request,
