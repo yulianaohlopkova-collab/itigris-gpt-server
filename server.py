@@ -1220,6 +1220,10 @@ async def count_all(
     department_name: Optional[str] = None,
     group: Optional[str] = None,
 ):
+    return {
+        "error": "deprecated",
+        "message": "use /count-real instead"
+    }
     return await count_by_price(
         request=request,
         category=category,
