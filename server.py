@@ -1250,11 +1250,11 @@ async def count_real(
     cat = normalize_category(category)
 
     dep_id = normalize_department(None, department_name)
-if not dep_id:
-    return JSONResponse({
-        "error": "missing_department",
-        "hint": "Укажи department_name, например Ленина"
-    }, status_code=400)
+    if not dep_id:
+        return JSONResponse({
+            "error": "missing_department",
+            "hint": "Укажи department_name, например Ленина"
+        }, status_code=400)
 
     REPORT_TYPE_MAP = {
         "contactlenses": "Контактные линзы",
@@ -1264,26 +1264,29 @@ if not dep_id:
     }
 
     report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
+
     payload = {
         "date": "30.03.2026",
         "department": str(dep_id),
         "department_input0": department_name,
-
         "reportType": report_type,
         "reportType_input0": report_type,
-
         "priceType": "Розничная",
         "priceType_input0": "Розничная",
-
         "groupByDepartment": "true",
         "groupByDepartment_input0": "По департаменту и параметрам",
-
         "companyUUID": APP_NAME,
-
         "userId": "1000000206",
         "uuidValue": "c1ae1aff-4cb3-4f46-96c8-9e0ea2f6264f",
         "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
-}
+    }
+
+    html = await fetch_report_page(payload)
+
+    print("HTML RESPONSE START")
+    print(html[:1000])
+    print("HTML RESPONSE END")
+
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")
 
@@ -1304,6 +1307,9 @@ if not dep_id:
                     if val.isdigit():
                         total_qty = int(val)
                         break
+
+        if total_qty is not None:
+            break
 
     if total_qty is None:
         return JSONResponse({"error": "cannot_parse_total"}, status_code=500)
