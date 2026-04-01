@@ -9,11 +9,31 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 
+async def login_itigris():
+    url = "https://optima.itigris.ru/odl/j_security_check"
+
+    payload = {
+        "j_username": "uli_o",
+        "j_password": "3${FRsLd"
+    }
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        response = await client.post(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+        )
+
+        return client
+
 async def fetch_report_page(payload: dict) -> str:
+    client = await login_itigris()
+
     url = "https://optima.itigris.ru/odl/report/generate"
 
-    async with httpx.AsyncClient(timeout=40.0) as client:
-        response = await client.post(url, json=payload)
+    response = await client.post(url, json=payload)
 
     if response.status_code != 200:
         raise RuntimeError(f"Report error: {response.status_code}")
