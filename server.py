@@ -10,6 +10,10 @@ from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 
 async def login_itigris(client: httpx.AsyncClient):
+    # 👉 1. сначала открываем страницу (получаем cookies)
+    await client.get("https://optima.itigris.ru/odl/login")
+
+    # 👉 2. потом логинимся
     url = "https://optima.itigris.ru/odl/j_security_check"
 
     payload = {
@@ -25,8 +29,8 @@ async def login_itigris(client: httpx.AsyncClient):
         }
     )
 
-    if response.status_code != 200:
-        raise RuntimeError("Login failed")
+    if response.status_code not in (200, 302):
+        raise RuntimeError(f"Login failed: {response.status_code}")
 
 async def fetch_report_page(payload: dict) -> str:
     async with httpx.AsyncClient(follow_redirects=True, timeout=40.0) as client:
