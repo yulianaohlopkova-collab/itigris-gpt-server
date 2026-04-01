@@ -40,7 +40,13 @@ async def fetch_report_page(payload: dict) -> str:
 
         url = "https://optima.itigris.ru/odl/report/generate"
 
-        response = await client.post(url, json=payload)
+        response = await client.post(
+    url,
+    data=payload,
+    headers={
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+)
 
         if response.status_code != 200:
             raise RuntimeError(f"Report error: {response.status_code}")
@@ -692,28 +698,6 @@ async def fetch_optima_remains(
             all_rows.extend(rows)
             page += 1
     return all_rows
-async def fetch_report_page(payload: dict):
-    if not API_KEY:
-        raise RuntimeError("ITIGRIS_API_KEY is not configured")
-
-    url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
-
-    headers = {
-    "Content-Type": "application/x-www-form-urlencoded",
-    "User-Agent": "Mozilla/5.0",
-    "Cookie": "route=1774854735.961.30.213769|157e90a545061f425c176730be876c37; JSESSIONID=C8459FDDC2AE11070169ACF9F959F4E4; _ym_uid=1774854815733790681; _ym_d=1774854815; _ym_isad=2; chaport-...; _ym_visorc=w",
-    "Referer": "https://optima.itigris.ru/odl",
-    "Origin": "https://optima.itigris.ru",
-    "X-Requested-With": "XMLHttpRequest"
-}
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.post(url, data=payload, headers=headers)
-
-    print("STATUS:", resp.status_code)
-    print("TEXT:", resp.text[:1000])
-
-    return resp.text
 
 # =======================
 # MODELS
