@@ -8,8 +8,17 @@ from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
-import httpx
 
+async def fetch_report_page(payload: dict) -> str:
+    url = "https://optima.itigris.ru/odl/report/generate"
+
+    async with httpx.AsyncClient(timeout=40.0) as client:
+        response = await client.post(url, json=payload)
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Report error: {response.status_code}")
+
+    return response.text
 # =======================
 # APP (docs/openapi отключены, мы добавим их вручную с токеном)
 # =======================
@@ -1233,13 +1242,85 @@ async def count_all(
         limit_items=0,
     )
 
+@app.get("/count-real-excel/{category}")
+async def count_real_excel(
+    request: Request,
+    category: str,
+    department_name: str
+):
+    from bs4 import BeautifulSoup
+
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    cat = normalize_category(category)
+
+    dep_id = normalize_department(None, department_name)
+    if not dep_id:
+        return JSONResponse({
+            "error": "missing_department",
+            "hint": "Укажи department_name, например Ленина"
+        }, status_code=400)
+
+    REPORT_TYPE_MAP = {
+        "contactlenses": "Контактные линзы",
+        "lenses": "Линзы",
+        "glasses": "Оправы",
+        "sunglasses": "Солнцезащитные очки",
+    }
+
+    report_type = REPORT_TYPE_MAP.get(cat, "Контактные линзы")
+
+    payload = {
+        "date": "30.03.2026",
+        "department": str(dep_id),
+        "department_input0": department_name,
+        "reportType": report_type,
+        "reportType_input0": report_type,
+        "priceType": "Розничная",
+        "priceType_input0": "Розничная",
+        "groupByDepartment": "true",
+        "groupByDepartment_input0": "По департаменту и параметрам",
+        "companyUUID": APP_NAME,
+        "userId": "1000000206",
+        "uuidValue": "c1ae1aff-4cb3-4f46-96c8-9e0ea2f6264f",
+        "pageUUID": "ab457be6-2ac2-442c-8299-23ac32bdd1a3"
+    }
+
+    try:
+        html = await fetch_report_page(payload)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    total = 0
+
+    for row in soup.select("table tbody tr"):
+        cols = row.find_all("td")
+        if len(cols) < 6:
+            continue
+
+        try:
+            qty = int(cols[5].text.strip().replace(" ", ""))
+            total += qty
+        except:
+            continue
+
+    return {
+        "category": cat,
+        "department": department_name,
+        "total_qty": total,
+        "source": "excel_report"
+    }
+
 @app.get("/count-real/{category}")
 async def count_real(
     request: Request,
     category: str,
     department_name: str
 ):
-
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
@@ -1266,10 +1347,10 @@ async def count_real(
     data = response.json()
 
     total_qty = sum(
-    item.get("amount", 0)
-    for item in data
-    if item.get("department") == dep_id
-)
+        item.get("amount", 0)
+        for item in data
+        if item.get("department") == dep_id
+    )
 
     return {
         "category": cat,
