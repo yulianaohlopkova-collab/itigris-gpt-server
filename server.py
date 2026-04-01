@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 async def login_itigris(client: httpx.AsyncClient):
     # 👉 1. сначала открываем страницу (получаем cookies)
-    await client.get("https://optima.itigris.ru/odl/login")
+    await client.get("https://optima.itigris.ru/odl")
 
     # 👉 2. потом логинимся
     url = "https://optima.itigris.ru/odl/j_security_check"
