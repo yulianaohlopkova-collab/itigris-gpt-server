@@ -9,7 +9,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 
-async def login_itigris():
+async def login_itigris(client: httpx.AsyncClient):
     url = "https://optima.itigris.ru/odl/j_security_check"
 
     payload = {
@@ -17,28 +17,34 @@ async def login_itigris():
         "j_password": "3${FRsLd"
     }
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        response = await client.post(
-            url,
-            data=payload,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-        )
-
-        return client
-
-async def fetch_report_page(payload: dict) -> str:
-    client = await login_itigris()
-
-    url = "https://optima.itigris.ru/odl/report/generate"
-
-    response = await client.post(url, json=payload)
+    response = await client.post(
+        url,
+        data=payload,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+    )
 
     if response.status_code != 200:
-        raise RuntimeError(f"Report error: {response.status_code}")
+        raise RuntimeError("Login failed")
 
-    return response.text
+async def fetch_report_page(payload: dict) -> str:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=40.0) as client:
+
+        # 👉 логинимся В ЭТОТ ЖЕ client
+        await login_itigris(client)
+
+        url = "https://optima.itigris.ru/odl/report/generate"
+
+        response = await client.post(url, json=payload)
+
+        if response.status_code != 200:
+            raise RuntimeError(f"Report error: {response.status_code}")
+
+        print(response.text[:2000])  # лог для проверки
+
+        return response.text
+        
 # =======================
 # APP (docs/openapi отключены, мы добавим их вручную с токеном)
 # =======================
