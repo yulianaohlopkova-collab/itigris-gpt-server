@@ -25,7 +25,39 @@ paths:
             application/json:
               schema:
                 type: object
+  /count-real/{category}:
+    get:
+      operationId: countReal
+      summary: Получить реальное количество (через remoteRemains)
 
+      parameters:
+
+        - name: category
+          in: path
+          required: true
+          schema:
+            type: string
+
+        - name: department_name
+          in: query
+          required: true
+          schema:
+            type: string
+
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+
+      responses:
+        "200":
+          description: Total quantity from remoteRemains
+          content:
+            application/json:
+              schema:
+                type: object
+                
   /departments:
     get:
       operationId: getDepartments
