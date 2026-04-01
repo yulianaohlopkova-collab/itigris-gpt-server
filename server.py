@@ -1237,9 +1237,8 @@ async def count_all(
 async def count_real(
     request: Request,
     category: str,
-    department_name: Optional[str] = None
+    department_name: str
 ):
-    import httpx
 
     auth_err = require_auth_token(request)
     if auth_err:
