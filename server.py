@@ -1266,7 +1266,11 @@ async def count_real(
 
     data = response.json()
 
-    total_qty = sum(item.get("amount", 0) for item in data)
+    total_qty = sum(
+    item.get("amount", 0)
+    for item in data
+    if item.get("department") == dep_id
+)
 
     return {
         "category": cat,
