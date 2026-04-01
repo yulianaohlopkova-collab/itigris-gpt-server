@@ -1351,7 +1351,7 @@ async def count_real(
     total_qty = sum(
         item.get("amount", 0)
         for item in data
-        if item.get("department") == dep_id
+        if str(item.get("department")) == str(dep_id)
     )
 
     return {
