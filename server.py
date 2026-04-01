@@ -1293,7 +1293,7 @@ async def count_real_excel(
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
         
-    print(html[:2000])
+    print(html)
     
     soup = BeautifulSoup(html, "html.parser")
 
