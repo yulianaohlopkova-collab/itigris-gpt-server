@@ -1278,12 +1278,13 @@ async def count_real_excel(
     }
 
     try:
-        html = await fetch_report_page(payload)
-        return {
-    "html_length": len(html),
-    "preview": html[:500]
-}
-        except Exception as e:
+    html = await fetch_report_page(payload)
+    return {
+        "html_length": len(html),
+        "preview": html[:500]
+    }
+
+except Exception as e:
     print("ERROR:", str(e))
     return {
         "error": str(e)
