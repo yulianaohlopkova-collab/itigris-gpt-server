@@ -1283,7 +1283,7 @@ async def count_real_excel(
     "html_length": len(html),
     "preview": html[:500]
 }
-    except Exception as e:
+        except Exception as e:
     print("ERROR:", str(e))
     return {
         "error": str(e)
