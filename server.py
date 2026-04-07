@@ -1284,7 +1284,10 @@ async def count_real_excel(
     "preview": html[:500]
 }
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    print("ERROR:", str(e))
+    return {
+        "error": str(e)
+    }
         
     print(html)
     
