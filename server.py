@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import openpyxl
 import xlsxwriter
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -511,6 +512,127 @@ def contact_lenses_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def normalize_header(text: str) -> str:
+    return str(text or "").strip().lower()
+
+
+REMAINGOODS_HEADERS = {
+    "qty_packs": {"количество, уп.", "количество уп.", "кол-во, уп.", "кол-во уп.", "количество упаковок", "упаковки"},
+    "qty_units": {"количество, шт.", "количество шт.", "кол-во, шт.", "кол-во шт.", "количество штук", "штуки", "шт"},
+    "remaining_in_pack": {"осталось в уп.", "осталось в уп", "остаток в уп.", "осталось"},
+    "in_pack": {"кол-во в уп.", "кол-во в уп", "количество в уп.", "количество в уп", "в упаковке", "кол-во в упаковке"},
+    "value": {"сумма", "итого", "стоимость", "сумма, руб", "сумма руб", "сумма (руб)"},
+}
+
+
+def find_col_index(headers: List[str], variants: set[str]) -> Optional[int]:
+    for idx, header in enumerate(headers):
+        if normalize_header(header) in variants:
+            return idx
+    return None
+
+
+def parse_remain_goods_csv(raw: bytes) -> List[Dict[str, Any]]:
+    text = raw.decode("utf-8-sig", errors="replace")
+    reader = csv.reader(io.StringIO(text))
+    rows = list(reader)
+    if not rows:
+        return []
+    headers = rows[0]
+    idx_packs = find_col_index(headers, REMAINGOODS_HEADERS["qty_packs"])
+    idx_units = find_col_index(headers, REMAINGOODS_HEADERS["qty_units"])
+    idx_remaining = find_col_index(headers, REMAINGOODS_HEADERS["remaining_in_pack"])
+    idx_in_pack = find_col_index(headers, REMAINGOODS_HEADERS["in_pack"])
+    idx_value = find_col_index(headers, REMAINGOODS_HEADERS["value"])
+
+    if idx_packs is None or idx_units is None or idx_value is None:
+        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+
+    out: List[Dict[str, Any]] = []
+    for row in rows[1:]:
+        def get_i(i: Optional[int]) -> Any:
+            if i is None or i >= len(row):
+                return None
+            return row[i]
+
+        out.append(
+            {
+                "qty_packs": parse_float(get_i(idx_packs)) or 0,
+                "qty_units": parse_float(get_i(idx_units)) or 0,
+                "remaining_in_pack": parse_float(get_i(idx_remaining)) if idx_remaining is not None else None,
+                "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
+                "value": parse_float(get_i(idx_value)) or 0,
+            }
+        )
+    return out
+
+
+def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
+    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+    headers_tuple = next(rows_iter, None)
+    if not headers_tuple:
+        return []
+    headers = [str(h or "") for h in headers_tuple]
+    idx_packs = find_col_index(headers, REMAINGOODS_HEADERS["qty_packs"])
+    idx_units = find_col_index(headers, REMAINGOODS_HEADERS["qty_units"])
+    idx_remaining = find_col_index(headers, REMAINGOODS_HEADERS["remaining_in_pack"])
+    idx_in_pack = find_col_index(headers, REMAINGOODS_HEADERS["in_pack"])
+    idx_value = find_col_index(headers, REMAINGOODS_HEADERS["value"])
+
+    if idx_packs is None or idx_units is None or idx_value is None:
+        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+
+    out: List[Dict[str, Any]] = []
+    for row in rows_iter:
+        def get_i(i: Optional[int]) -> Any:
+            if i is None or i >= len(row):
+                return None
+            return row[i]
+
+        out.append(
+            {
+                "qty_packs": parse_float(get_i(idx_packs)) or 0,
+                "qty_units": parse_float(get_i(idx_units)) or 0,
+                "remaining_in_pack": parse_float(get_i(idx_remaining)) if idx_remaining is not None else None,
+                "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
+                "value": parse_float(get_i(idx_value)) or 0,
+            }
+        )
+    return out
+
+
+def remain_goods_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total_packs = int(sum(parse_float(r.get("qty_packs")) or 0 for r in rows))
+    total_units = int(sum(parse_float(r.get("qty_units")) or 0 for r in rows))
+    total_value = float(sum(parse_float(r.get("value")) or 0 for r in rows))
+    open_lines = 0
+    open_packs = 0
+    open_units = 0
+    open_value = 0.0
+    for r in rows:
+        rem = parse_float(r.get("remaining_in_pack"))
+        in_pack = parse_float(r.get("in_pack"))
+        if rem is None or in_pack is None:
+            continue
+        if rem > 0 and rem < in_pack:
+            open_lines += 1
+            open_packs += int(parse_float(r.get("qty_packs")) or 0)
+            open_units += int(parse_float(r.get("qty_units")) or 0)
+            open_value += float(parse_float(r.get("value")) or 0)
+
+    return {
+        "total_qty_packs": total_packs,
+        "total_qty_units": total_units,
+        "total_value": round(total_value, 2),
+        "open_lines": open_lines,
+        "open_qty_packs": open_packs,
+        "open_qty_units": open_units,
+        "open_value": round(open_value, 2),
+    }
+
+
 def rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str = "Remains") -> bytes:
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {"in_memory": True})
@@ -897,6 +1019,41 @@ async def sales_analyze_csv(request: Request, body: SalesAnalyzeCsvRequest) -> A
         "training": csv_text_to_rows(body.training_csv) if body.training_csv else [],
     }
     return analyze_dataset(dataset)
+
+
+@app.post("/contactlenses/remainGoodsReport/analyze")
+async def contactlenses_remain_goods_report_analyze(
+    request: Request,
+    report_file: UploadFile = File(...),
+) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    raw = await report_file.read()
+    if len(raw) > 30_000_000:
+        raise HTTPException(status_code=413, detail="report_file_too_large")
+
+    filename = (report_file.filename or "").lower()
+    content_type = (report_file.content_type or "").lower()
+    if filename.endswith(".csv") or "csv" in content_type or content_type == "text/plain":
+        rows = parse_remain_goods_csv(raw)
+    elif filename.endswith(".xlsx") or "spreadsheetml" in content_type:
+        rows = parse_remain_goods_xlsx(raw)
+    else:
+        raise HTTPException(status_code=400, detail="unsupported_report_file_type")
+
+    totals = remain_goods_totals(rows)
+    return {
+        "category": "contactlenses",
+        "source": "remainGoodsReport upload (truth source for contact lenses packs/units/value)",
+        "rows_count": len(rows),
+        "summary": totals,
+        "note": (
+            "Use this endpoint for exact contact lenses stock in packs/units/value including open packs. "
+            "ITigris remoteRemains is an API snapshot and may undercount open packs."
+        ),
+    }
 
 
 @app.get("/openapi.json", include_in_schema=False)

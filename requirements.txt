@@ -6,3 +6,4 @@ xlsxwriter
 bs4
 beautifulsoup4
 python-multipart
+openpyxl

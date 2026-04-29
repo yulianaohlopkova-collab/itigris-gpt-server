@@ -287,6 +287,33 @@ paths:
                   data_sources:
                     type: object
 
+  /contactlenses/remainGoodsReport/analyze:
+    post:
+      operationId: contactlensesRemainGoodsReportAnalyze
+      summary: Точный остаток МКЛ из remainGoodsReport (CSV/XLSX upload)
+      description: >
+        Для контактных линз remoteRemains может не учитывать открытые упаковки.
+        Этот endpoint принимает выгрузку remainGoodsReport и возвращает packs/units/value
+        плюс статистику открытых упаковок.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [report_file]
+              properties:
+                report_file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Report summary
+          content:
+            application/json:
+              schema:
+                type: object
+
 components:
   securitySchemes:
     OdlServerToken:
