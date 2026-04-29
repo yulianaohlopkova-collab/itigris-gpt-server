@@ -1117,23 +1117,24 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
     else:
         dep_ids = [str(v) for v in DEPARTMENTS.values()]
 
-    form: List[Tuple[str, str]] = [
-        ("date", date_ddmmyyyy),
-        ("reportType", REMAINGOODS_WEB_REPORT_TYPE),
-        ("priceType", REMAINGOODS_WEB_PRICE_TYPE),
-        ("groupByDepartment", "true"),
-        ("prepareData", "true"),
-        ("companyUUID", company_uuid),
-        ("userId", REMAINGOODS_WEB_USER_ID),
-        ("pageUUID", REMAINGOODS_WEB_PAGE_UUID),
-        ("uuidValue", REMAINGOODS_WEB_UUID_VALUE),
-    ]
-    for d in dep_ids:
-        form.append(("department", d))
+    # NOTE: For httpx.AsyncClient we must avoid passing "data" as a list of tuples with repeated
+    # keys, because httpx may build a sync byte stream (IteratorByteStream) which fails at send time.
+    # Use dict + list values instead.
+    form: Dict[str, Any] = {
+        "date": date_ddmmyyyy,
+        "reportType": REMAINGOODS_WEB_REPORT_TYPE,
+        "priceType": REMAINGOODS_WEB_PRICE_TYPE,
+        "groupByDepartment": "true",
+        "prepareData": "true",
+        "companyUUID": company_uuid,
+        "userId": REMAINGOODS_WEB_USER_ID,
+        "pageUUID": REMAINGOODS_WEB_PAGE_UUID,
+        "uuidValue": REMAINGOODS_WEB_UUID_VALUE,
+        "department": dep_ids,
+    }
 
     url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
     headers = {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
         "Cookie": REMAINGOODS_WEB_COOKIE,
     }
