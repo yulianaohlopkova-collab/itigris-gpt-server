@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import openpyxl
 import xlsxwriter
+import xlrd
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -603,6 +604,42 @@ def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
     return out
 
 
+def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
+    book = xlrd.open_workbook(file_contents=raw)
+    sheet = book.sheet_by_index(0)
+    if sheet.nrows <= 0:
+        return []
+    headers = [str(sheet.cell_value(0, c) or "") for c in range(sheet.ncols)]
+    idx_packs = find_col_index(headers, REMAINGOODS_HEADERS["qty_packs"])
+    idx_units = find_col_index(headers, REMAINGOODS_HEADERS["qty_units"])
+    idx_remaining = find_col_index(headers, REMAINGOODS_HEADERS["remaining_in_pack"])
+    idx_in_pack = find_col_index(headers, REMAINGOODS_HEADERS["in_pack"])
+    idx_value = find_col_index(headers, REMAINGOODS_HEADERS["value"])
+
+    if idx_packs is None or idx_units is None or idx_value is None:
+        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+
+    def cell(r: int, c: Optional[int]) -> Any:
+        if c is None or c < 0 or c >= sheet.ncols:
+            return None
+        if r < 0 or r >= sheet.nrows:
+            return None
+        return sheet.cell_value(r, c)
+
+    out: List[Dict[str, Any]] = []
+    for r in range(1, sheet.nrows):
+        out.append(
+            {
+                "qty_packs": parse_float(cell(r, idx_packs)) or 0,
+                "qty_units": parse_float(cell(r, idx_units)) or 0,
+                "remaining_in_pack": parse_float(cell(r, idx_remaining)) if idx_remaining is not None else None,
+                "in_pack": parse_float(cell(r, idx_in_pack)) if idx_in_pack is not None else None,
+                "value": parse_float(cell(r, idx_value)) or 0,
+            }
+        )
+    return out
+
+
 def remain_goods_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_packs = int(sum(parse_float(r.get("qty_packs")) or 0 for r in rows))
     total_units = int(sum(parse_float(r.get("qty_units")) or 0 for r in rows))
@@ -1040,6 +1077,8 @@ async def contactlenses_remain_goods_report_analyze(
         rows = parse_remain_goods_csv(raw)
     elif filename.endswith(".xlsx") or "spreadsheetml" in content_type:
         rows = parse_remain_goods_xlsx(raw)
+    elif filename.endswith(".xls") or content_type in {"application/vnd.ms-excel"}:
+        rows = parse_remain_goods_xls(raw)
     else:
         raise HTTPException(status_code=400, detail="unsupported_report_file_type")
 

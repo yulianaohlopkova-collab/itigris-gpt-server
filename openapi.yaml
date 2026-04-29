@@ -293,7 +293,7 @@ paths:
       summary: Точный остаток МКЛ из remainGoodsReport (CSV/XLSX upload)
       description: >
         Для контактных линз remoteRemains может не учитывать открытые упаковки.
-        Этот endpoint принимает выгрузку remainGoodsReport и возвращает packs/units/value
+        Этот endpoint принимает выгрузку remainGoodsReport (.csv/.xls/.xlsx) и возвращает packs/units/value
         плюс статистику открытых упаковок.
       requestBody:
         required: true
