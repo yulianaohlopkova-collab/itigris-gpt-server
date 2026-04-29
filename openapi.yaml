@@ -396,6 +396,34 @@ paths:
               schema:
                 type: object
 
+  /contactlenses/remainGoodsReport/snapshot/set-global:
+    post:
+      operationId: contactlensesRemainGoodsReportSnapshotSetGlobal
+      summary: Загрузить общий remainGoodsReport и сохранить snapshot по всем департаментам
+      description: >
+        MVP-механизм: загрузить один общий отчет remainGoodsReport (несколько департаментов),
+        сервер сохранит итоги по каждому департаменту. Далее /contactlenses/stock/{department_name}
+        будет отвечать из этого snapshot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, file_base64]
+              properties:
+                filename:
+                  type: string
+                file_base64:
+                  type: string
+      responses:
+        "200":
+          description: Snapshot saved
+          content:
+            application/json:
+              schema:
+                type: object
+
   /contactlenses/stock/{department_name}:
     get:
       operationId: contactlensesStock

@@ -305,6 +305,11 @@ class RemainGoodsReportSnapshotSetRequest(BaseModel):
     file_base64: str = Field(..., description="Base64-encoded remainGoodsReport file bytes (.xls/.xlsx/.csv).")
 
 
+class RemainGoodsReportGlobalSnapshotSetRequest(BaseModel):
+    filename: str = Field(..., description="Original filename (e.g. remainGoodsReport_all.xls).")
+    file_base64: str = Field(..., description="Base64-encoded remainGoodsReport file bytes (.xls/.xlsx/.csv).")
+
+
 class RemainGoodsReportSnapshotInfo(BaseModel):
     department_id: int
     department_name: str
@@ -317,6 +322,7 @@ class RemainGoodsReportSnapshotInfo(BaseModel):
 REMAINGOODS_SNAPSHOT_TTL_SECONDS = int(os.getenv("REMAINGOODS_SNAPSHOT_TTL_SECONDS", str(24 * 60 * 60)))
 # In-memory snapshot cache (Render dynos may restart; this is MVP-grade).
 _contactlenses_report_snapshots: Dict[int, Dict[str, Any]] = {}
+_contactlenses_report_global_snapshot: Optional[Dict[str, Any]] = None
 
 
 def csv_bytes_to_rows(raw: bytes) -> List[Dict[str, Any]]:
@@ -807,14 +813,15 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
     )
 
 
-def remain_goods_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def remain_goods_totals(rows: List[Dict[str, Any]], prefer_summary_row: bool = True) -> Dict[str, Any]:
     # Prefer explicit summary line if present (common in ITigris exports).
     summary_row: Optional[Dict[str, Any]] = None
-    for r in rows:
-        dep = normalize_header(r.get("department") or "")
-        if dep in {"итого", "всего", "итог", "total"}:
-            summary_row = r
-            break
+    if prefer_summary_row:
+        for r in rows:
+            dep = normalize_header(r.get("department") or "")
+            if dep in {"итого", "всего", "итог", "total"}:
+                summary_row = r
+                break
 
     value_from_details = False
     if summary_row:
@@ -883,6 +890,32 @@ def get_snapshot(department_id: int) -> Optional[Dict[str, Any]]:
         return None
     return snap
 
+
+def get_global_snapshot() -> Optional[Dict[str, Any]]:
+    global _contactlenses_report_global_snapshot
+    snap = _contactlenses_report_global_snapshot
+    if not snap:
+        return None
+    if int(time.time()) >= int(snap["expires_at_unix"]):
+        _contactlenses_report_global_snapshot = None
+        return None
+    return snap
+
+
+def remain_goods_totals_by_department(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        dep = str(r.get("department") or "").strip()
+        if not dep:
+            continue
+        if normalize_header(dep) in {"итого", "всего", "итог", "total"}:
+            continue
+        grouped.setdefault(dep, []).append(r)
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for dep, dep_rows in grouped.items():
+        result[dep] = remain_goods_totals(dep_rows, prefer_summary_row=False)
+    return result
 
 def rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str = "Remains") -> bytes:
     output = io.BytesIO()
@@ -1394,7 +1427,7 @@ async def contactlenses_remain_goods_report_snapshot_set(
         raise HTTPException(status_code=413, detail="report_file_too_large")
 
     rows = parse_remain_goods_by_filename(body.filename, raw)
-    totals = remain_goods_totals(rows)
+    totals = remain_goods_totals(rows, prefer_summary_row=True)
     now = int(time.time())
     expires = now + REMAINGOODS_SNAPSHOT_TTL_SECONDS
     _contactlenses_report_snapshots[dep_id] = {
@@ -1420,6 +1453,51 @@ async def contactlenses_remain_goods_report_snapshot_set(
     }
 
 
+@app.post("/contactlenses/remainGoodsReport/snapshot/set-global")
+async def contactlenses_remain_goods_report_snapshot_set_global(
+    request: Request,
+    body: RemainGoodsReportGlobalSnapshotSetRequest,
+) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    try:
+        raw = base64.b64decode(body.file_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_base64")
+    if len(raw) > 30_000_000:
+        raise HTTPException(status_code=413, detail="report_file_too_large")
+
+    rows = parse_remain_goods_by_filename(body.filename, raw)
+    overall = remain_goods_totals(rows, prefer_summary_row=True)
+    by_dep = remain_goods_totals_by_department(rows)
+
+    now = int(time.time())
+    expires = now + REMAINGOODS_SNAPSHOT_TTL_SECONDS
+    global _contactlenses_report_global_snapshot
+    _contactlenses_report_global_snapshot = {
+        "stored_at_unix": now,
+        "expires_at_unix": expires,
+        "filename": body.filename,
+        "rows_count": len(rows),
+        "overall_summary": overall,
+        "by_department": by_dep,
+    }
+    return {
+        "ok": True,
+        "snapshot": {
+            "stored_at_unix": now,
+            "expires_at_unix": expires,
+            "filename": body.filename,
+            "rows_count": len(rows),
+            "departments_count": len(by_dep),
+        },
+        "overall_summary": overall,
+        "departments": list(by_dep.keys()),
+    }
+
+
 @app.get("/contactlenses/stock/{department_name}")
 async def contactlenses_stock(
     request: Request,
@@ -1435,6 +1513,27 @@ async def contactlenses_stock(
         return JSONResponse({"error": "unknown_department"}, status_code=400)
 
     if source in {"auto", "snapshot"}:
+        # 1) Prefer global snapshot (single upload for all departments).
+        global_snap = get_global_snapshot()
+        if global_snap:
+            # Match by normalized department name.
+            for dep_name, summary in global_snap["by_department"].items():
+                if normalize_header(dep_name) == normalize_header(department_name):
+                    return {
+                        "category": "contactlenses",
+                        "department": department_name,
+                        "source": "remainGoodsReport global snapshot (truth for packs/units/value; includes open packs)",
+                        "snapshot": {
+                            "stored_at_unix": global_snap["stored_at_unix"],
+                            "expires_at_unix": global_snap["expires_at_unix"],
+                            "filename": global_snap["filename"],
+                            "rows_count": global_snap["rows_count"],
+                        },
+                        "summary": summary,
+                        "overall_summary": global_snap["overall_summary"],
+                    }
+
+        # 2) Per-department snapshot (older mode).
         snap = get_snapshot(dep_id)
         if snap:
             return {
@@ -1455,7 +1554,7 @@ async def contactlenses_stock(
             return JSONResponse(
                 {
                     "error": "snapshot_missing",
-                    "detail": "No remainGoodsReport snapshot stored for this department. Upload it via /contactlenses/remainGoodsReport/snapshot/set.",
+                    "detail": "No remainGoodsReport snapshot stored for this department. Upload it via /contactlenses/remainGoodsReport/snapshot/set-global or /contactlenses/remainGoodsReport/snapshot/set.",
                 },
                 status_code=404,
             )
