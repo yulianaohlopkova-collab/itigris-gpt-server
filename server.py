@@ -13,6 +13,7 @@ import httpx
 import openpyxl
 import xlsxwriter
 import xlrd
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -45,6 +46,15 @@ REMOTE_REMAINS_URL = f"https://optima.itigris.ru/{APP_NAME}/remoteRemains/list"
 
 REMAINGOODS_AUTO_FETCH_URL_TEMPLATE = os.getenv("ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE", "").strip()
 REMAINGOODS_AUTO_REFRESH_MIN_SECONDS = int(os.getenv("REMAINGOODS_AUTO_REFRESH_MIN_SECONDS", "600"))
+
+REMAINGOODS_WEB_COOKIE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_COOKIE", "").strip()
+REMAINGOODS_WEB_COMPANY_UUID = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_COMPANY_UUID", "").strip()
+REMAINGOODS_WEB_USER_ID = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_USER_ID", "").strip()
+REMAINGOODS_WEB_PAGE_UUID = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_PAGE_UUID", "").strip()
+REMAINGOODS_WEB_UUID_VALUE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_UUID_VALUE", "").strip()
+REMAINGOODS_WEB_REPORT_TYPE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_REPORT_TYPE", "Контактные линзы").strip()
+REMAINGOODS_WEB_PRICE_TYPE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_PRICE_TYPE", "Розничная").strip()
+REMAINGOODS_WEB_DEPARTMENT_IDS = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_DEPARTMENT_IDS", "").strip()
 
 
 DEPARTMENTS: Dict[str, int] = {
@@ -960,6 +970,169 @@ async def _auto_fetch_remain_goods_report_bytes() -> Tuple[Optional[str], Option
     return filename, raw, None
 
 
+def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
+    """
+    Parse remainGoodsReport HTML page and convert to normalized rows.
+    HTML layout can change; we search for a table that contains required headers.
+    """
+    html = raw.decode("utf-8", errors="replace")
+    soup = BeautifulSoup(html, "html.parser")
+
+    required_keys = {"qty_packs", "qty_units", "remaining_in_pack", "in_pack", "value"}
+    tables = soup.find_all("table")
+    best: Optional[Tuple[List[str], Any]] = None
+    for table in tables:
+        # Find first row that looks like header.
+        rows = table.find_all("tr")
+        if not rows:
+            continue
+        header_row = None
+        header_cells: List[str] = []
+        for tr in rows[:30]:
+            cells = tr.find_all(["th", "td"])
+            if not cells:
+                continue
+            texts = [c.get_text(" ", strip=True) for c in cells]
+            norms = [normalize_header(t) for t in texts]
+            idx = {
+                "department": find_col_index(norms, REMAINGOODS_HEADERS_NORM["department"]),
+                "qty_packs": find_col_index(norms, REMAINGOODS_HEADERS_NORM["qty_packs"]),
+                "qty_units": find_col_index(norms, REMAINGOODS_HEADERS_NORM["qty_units"]),
+                "remaining_in_pack": find_col_index(norms, REMAINGOODS_HEADERS_NORM["remaining_in_pack"]),
+                "in_pack": find_col_index(norms, REMAINGOODS_HEADERS_NORM["in_pack"]),
+                "value": find_col_index(norms, REMAINGOODS_HEADERS_NORM["value"]),
+                "unit_price": find_col_index(norms, REMAINGOODS_HEADERS_NORM["unit_price"]),
+            }
+            present = {k for k, v in idx.items() if v is not None}
+            if required_keys.issubset(present):
+                header_row = tr
+                header_cells = texts
+                break
+        if not header_row:
+            continue
+        best = (header_cells, table)
+        break
+
+    if not best:
+        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+
+    header_cells, table = best
+    headers = [normalize_header(h) for h in header_cells]
+    idx = {
+        "department": find_col_index(headers, REMAINGOODS_HEADERS_NORM["department"]),
+        "qty_packs": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_packs"]),
+        "qty_units": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_units"]),
+        "remaining_in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["remaining_in_pack"]),
+        "in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["in_pack"]),
+        "value": find_col_index(headers, REMAINGOODS_HEADERS_NORM["value"]),
+        "unit_price": find_col_index(headers, REMAINGOODS_HEADERS_NORM["unit_price"]),
+    }
+
+    def cell_text(c: Any) -> str:
+        return (c.get_text(" ", strip=True) if c else "").strip()
+
+    def parse_num(s: str) -> float:
+        # Supports "2 320 150,00" and "2320150.00" formats.
+        t = (s or "").strip()
+        if not t:
+            return 0.0
+        t = t.replace("\xa0", " ").replace(" ", "")
+        t = t.replace("руб.", "").replace("руб", "").replace("₽", "")
+        t = t.replace(",", ".")
+        # keep digits, minus, dot
+        t = re.sub(r"[^0-9\\-\\.]", "", t)
+        if t in {"", "-", "."}:
+            return 0.0
+        try:
+            return float(t)
+        except Exception:
+            return 0.0
+
+    rows_out: List[Dict[str, Any]] = []
+    for tr in table.find_all("tr"):
+        cells = tr.find_all(["td", "th"])
+        if not cells:
+            continue
+        texts = [cell_text(c) for c in cells]
+        # skip obvious header-like rows
+        if any(normalize_header(t) == headers[0] for t in texts[:1]) and len(texts) == len(headers):
+            continue
+        if len(texts) < len(headers):
+            continue
+        dep = texts[idx["department"]] if idx["department"] is not None else ""
+        qty_packs = parse_num(texts[idx["qty_packs"]]) if idx["qty_packs"] is not None else 0.0
+        qty_units = parse_num(texts[idx["qty_units"]]) if idx["qty_units"] is not None else 0.0
+        remaining_in_pack = parse_num(texts[idx["remaining_in_pack"]]) if idx["remaining_in_pack"] is not None else 0.0
+        in_pack = parse_num(texts[idx["in_pack"]]) if idx["in_pack"] is not None else 0.0
+        value = parse_num(texts[idx["value"]]) if idx["value"] is not None else 0.0
+        unit_price = parse_num(texts[idx["unit_price"]]) if idx["unit_price"] is not None else 0.0
+
+        if not dep and qty_packs == 0 and qty_units == 0 and value == 0:
+            continue
+
+        rows_out.append(
+            {
+                "department": dep,
+                "qty_packs": qty_packs,
+                "qty_units": qty_units,
+                "remaining_in_pack": remaining_in_pack,
+                "in_pack": in_pack,
+                "value": value,
+                "unit_price": unit_price,
+            }
+        )
+    if not rows_out:
+        raise HTTPException(status_code=400, detail="remainGoodsReport_no_rows_detected")
+    return rows_out
+
+
+async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] = None) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Uses Optima web session (cookie/JSESSIONID) to request HTML reportPage and parse it.
+    """
+    if not REMAINGOODS_WEB_COOKIE:
+        raise HTTPException(status_code=500, detail="auto_web_cookie_not_configured")
+    company_uuid = REMAINGOODS_WEB_COMPANY_UUID or APP_NAME
+    if not REMAINGOODS_WEB_USER_ID or not REMAINGOODS_WEB_PAGE_UUID or not REMAINGOODS_WEB_UUID_VALUE:
+        raise HTTPException(status_code=500, detail="auto_web_payload_not_configured")
+
+    if not date_ddmmyyyy:
+        # Default: server local date (Render is usually UTC; for MVP this is OK, can override via refresh endpoint).
+        date_ddmmyyyy = time.strftime("%d.%m.%Y", time.localtime())
+
+    if REMAINGOODS_WEB_DEPARTMENT_IDS:
+        dep_ids = [d.strip() for d in REMAINGOODS_WEB_DEPARTMENT_IDS.split(",") if d.strip()]
+    else:
+        dep_ids = [str(v) for v in DEPARTMENTS.values()]
+
+    form: List[Tuple[str, str]] = [
+        ("date", date_ddmmyyyy),
+        ("reportType", REMAINGOODS_WEB_REPORT_TYPE),
+        ("priceType", REMAINGOODS_WEB_PRICE_TYPE),
+        ("groupByDepartment", "true"),
+        ("prepareData", "true"),
+        ("companyUUID", company_uuid),
+        ("userId", REMAINGOODS_WEB_USER_ID),
+        ("pageUUID", REMAINGOODS_WEB_PAGE_UUID),
+        ("uuidValue", REMAINGOODS_WEB_UUID_VALUE),
+    ]
+    for d in dep_ids:
+        form.append(("department", d))
+
+    url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Cookie": REMAINGOODS_WEB_COOKIE,
+    }
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        resp = await client.post(url, data=form, headers=headers)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"auto_web_http_{resp.status_code}")
+    rows = _parse_remain_goods_html(resp.content)
+    return f"remainGoodsReport_reportPage_{date_ddmmyyyy}.html", rows
+
+
 def _parse_remain_goods_report_auto(filename: Optional[str], raw: bytes) -> Tuple[str, List[Dict[str, Any]]]:
     fn = (filename or "").lower()
     if fn.endswith(".csv"):
@@ -983,12 +1156,15 @@ def _parse_remain_goods_report_auto(filename: Optional[str], raw: bytes) -> Tupl
 
 async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dict[str, Any]:
     """
-    Best-effort refresh of global snapshot from ITigris report export URL.
+    Best-effort refresh of global snapshot from ITigris.
+    Methods:
+    1) direct file URL (ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE) [preferred]
+    2) web session + reportPage HTML (ITIGRIS_REMAINGOODSREPORT_WEB_*) [fallback]
     """
     now = int(time.time())
     _contactlenses_auto_fetch_state["last_attempt_unix"] = now
 
-    if not REMAINGOODS_AUTO_FETCH_URL_TEMPLATE:
+    if not REMAINGOODS_AUTO_FETCH_URL_TEMPLATE and not REMAINGOODS_WEB_COOKIE:
         _contactlenses_auto_fetch_state["last_error"] = "auto_fetch_not_configured"
         _contactlenses_auto_fetch_state["last_error_at_unix"] = now
         return {"ok": False, "error": "auto_fetch_not_configured"}
@@ -999,14 +1175,20 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         if age < REMAINGOODS_AUTO_REFRESH_MIN_SECONDS:
             return {"ok": True, "skipped": True, "reason": "recent_snapshot"}
 
-    filename, raw, err = await _auto_fetch_remain_goods_report_bytes()
-    if err or not raw:
-        _contactlenses_auto_fetch_state["last_error"] = err or "auto_fetch_failed"
-        _contactlenses_auto_fetch_state["last_error_at_unix"] = now
-        return {"ok": False, "error": err or "auto_fetch_failed"}
-
+    resolved_filename: str
+    rows: List[Dict[str, Any]]
+    method_used: str
     try:
-        resolved_filename, rows = _parse_remain_goods_report_auto(filename, raw)
+        if REMAINGOODS_AUTO_FETCH_URL_TEMPLATE:
+            filename, raw, err = await _auto_fetch_remain_goods_report_bytes()
+            if err or not raw:
+                raise HTTPException(status_code=502, detail=err or "auto_fetch_failed")
+            resolved_filename, rows = _parse_remain_goods_report_auto(filename, raw)
+            method_used = "url_template"
+        else:
+            resolved_filename, rows = await _auto_fetch_remain_goods_report_via_web()
+            method_used = "web_reportPage"
+
         overall = remain_goods_totals(rows, prefer_summary_row=True)
         by_dep = remain_goods_totals_by_department(rows)
     except HTTPException as e:
@@ -1037,6 +1219,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
     return {
         "ok": True,
         "skipped": False,
+        "method": method_used,
         "stored_at_unix": now,
         "expires_at_unix": expires,
         "filename": resolved_filename,
@@ -1649,8 +1832,12 @@ async def contactlenses_remain_goods_report_auto_status(request: Request) -> Any
         return auth_err
     global_snap = get_global_snapshot()
     return {
-        "auto_fetch_configured": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE),
+        "auto_fetch_configured": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE or REMAINGOODS_WEB_COOKIE),
         "auto_refresh_min_seconds": REMAINGOODS_AUTO_REFRESH_MIN_SECONDS,
+        "auto_fetch_methods": {
+            "url_template": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE),
+            "web_reportPage": bool(REMAINGOODS_WEB_COOKIE),
+        },
         "remote_api_key_configured": bool(REMOTE_API_KEY),
         "external_api_key_configured": bool(EXTERNAL_API_KEY),
         "state": dict(_contactlenses_auto_fetch_state),

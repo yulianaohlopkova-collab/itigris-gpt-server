@@ -444,8 +444,10 @@ paths:
       operationId: contactlensesRemainGoodsReportAutoRefresh
       summary: Обновить global snapshot remainGoodsReport из ITigris (без ручной загрузки)
       description: >
-        Сервер попробует скачать актуальный remainGoodsReport по URL-шаблону из Render env
-        `ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE`, распарсить и обновить global snapshot.
+        Сервер попробует получить актуальный remainGoodsReport автоматически и обновить global snapshot.
+        Источники:
+        1) `ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE` (прямая загрузка файла)
+        2) web session cookie + reportPage (env `ITIGRIS_REMAINGOODSREPORT_WEB_*`)
       parameters:
         - name: force
           in: query

@@ -31,6 +31,12 @@ Environment:
 - `ITIGRIS_EXTERNAL_API_KEY` optional
 - `ODL_SERVER_TOKEN`
 - `ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE` optional (auto-fetch remainGoodsReport для точных остатков МКЛ)
+- `ITIGRIS_REMAINGOODSREPORT_WEB_COOKIE` optional (Cookie header, если авто-fetch возможен только через web session)
+- `ITIGRIS_REMAINGOODSREPORT_WEB_USER_ID` optional
+- `ITIGRIS_REMAINGOODSREPORT_WEB_PAGE_UUID` optional
+- `ITIGRIS_REMAINGOODSREPORT_WEB_UUID_VALUE` optional
+- `ITIGRIS_REMAINGOODSREPORT_WEB_COMPANY_UUID` optional (default = ITIGRIS_APP_NAME)
+- `ITIGRIS_REMAINGOODSREPORT_WEB_DEPARTMENT_IDS` optional (comma-separated; default = all known departments in server)
 - `REMAINGOODS_AUTO_REFRESH_MIN_SECONDS` optional (default 600)
 
 ## Реальный прогон MVP
