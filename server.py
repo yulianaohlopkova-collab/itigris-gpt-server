@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import io
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import xlsxwriter
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -275,6 +276,23 @@ class RemainsFilteredRequest(BaseModel):
 
 class SalesAnalyzeRequest(BaseModel):
     data: Optional[Dict[str, List[Dict[str, Any]]]] = None
+
+
+def csv_bytes_to_rows(raw: bytes) -> List[Dict[str, Any]]:
+    text = raw.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    return [dict(row) for row in reader]
+
+
+async def load_csv_upload(file: Optional[UploadFile], required: bool) -> List[Dict[str, Any]]:
+    if file is None:
+        if required:
+            raise HTTPException(status_code=400, detail="missing_required_csv")
+        return []
+    data = await file.read()
+    if len(data) > 10_000_000:
+        raise HTTPException(status_code=413, detail="csv_too_large")
+    return csv_bytes_to_rows(data)
 
 
 def require_auth_token(request: Request) -> Optional[JSONResponse]:
@@ -728,6 +746,29 @@ async def sales_analyze(request: Request, body: SalesAnalyzeRequest) -> Any:
     if auth_err:
         return auth_err
     dataset = body.data if body.data is not None else load_input_folder(Path("data/input"))
+    return analyze_dataset(dataset)
+
+
+@app.post("/sales/analyze-upload")
+async def sales_analyze_upload(
+    request: Request,
+    sales_period: UploadFile = File(...),
+    plan_fact: Optional[UploadFile] = File(None),
+    employees: Optional[UploadFile] = File(None),
+    categories: Optional[UploadFile] = File(None),
+    training: Optional[UploadFile] = File(None),
+) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    dataset = {
+        "sales_period": await load_csv_upload(sales_period, required=True),
+        "plan_fact": await load_csv_upload(plan_fact, required=False),
+        "employees": await load_csv_upload(employees, required=False),
+        "categories": await load_csv_upload(categories, required=False),
+        "training": await load_csv_upload(training, required=False),
+    }
     return analyze_dataset(dataset)
 
 

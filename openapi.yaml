@@ -215,6 +215,49 @@ paths:
                   data_sources:
                     type: object
 
+  /sales/analyze-upload:
+    post:
+      operationId: salesAnalyzeUpload
+      summary: Сформировать weekly output из CSV файлов (upload)
+      description: >
+        Загрузи sales_period.csv обязательно, остальные файлы опционально.
+        Endpoint возвращает report_markdown (markdown) и счетчики строк по источникам.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [sales_period]
+              properties:
+                sales_period:
+                  type: string
+                  format: binary
+                plan_fact:
+                  type: string
+                  format: binary
+                employees:
+                  type: string
+                  format: binary
+                categories:
+                  type: string
+                  format: binary
+                training:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Markdown report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report_markdown:
+                    type: string
+                  data_sources:
+                    type: object
+
 components:
   securitySchemes:
     OdlServerToken:
