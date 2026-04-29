@@ -366,6 +366,64 @@ paths:
               schema:
                 type: object
 
+  /contactlenses/remainGoodsReport/snapshot/set:
+    post:
+      operationId: contactlensesRemainGoodsReportSnapshotSet
+      summary: Загрузить remainGoodsReport один раз и сохранить как snapshot
+      description: >
+        MVP-механизм: загрузить актуальный remainGoodsReport для департамента 1 раз,
+        сохранить в памяти сервера как truth snapshot и дальше отвечать без повторной
+        вставки CSV. Snapshot живет ограниченное время (TTL).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [department_name, filename, file_base64]
+              properties:
+                department_name:
+                  type: string
+                filename:
+                  type: string
+                file_base64:
+                  type: string
+      responses:
+        "200":
+          description: Snapshot saved
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /contactlenses/stock/{department_name}:
+    get:
+      operationId: contactlensesStock
+      summary: Остаток МКЛ по департаменту (snapshot truth, fallback API)
+      description: >
+        Если есть сохраненный snapshot remainGoodsReport — вернет точный packs/units/value.
+        Если snapshot нет — вернет remoteRemains snapshot (approximate) и предупреждение.
+      parameters:
+        - name: department_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [auto, snapshot, api]
+            default: auto
+      responses:
+        "200":
+          description: Stock result
+          content:
+            application/json:
+              schema:
+                type: object
+
 components:
   securitySchemes:
     OdlServerToken:

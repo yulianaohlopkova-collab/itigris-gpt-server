@@ -4,6 +4,7 @@ import csv
 import base64
 import io
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -296,6 +297,26 @@ class RemainGoodsReportCsvRequest(BaseModel):
 class RemainGoodsReportBase64Request(BaseModel):
     filename: str = Field(..., description="Original filename (e.g. remainGoodsReport.xls).")
     file_base64: str = Field(..., description="Base64-encoded file bytes for .xls/.xlsx/.csv.")
+
+
+class RemainGoodsReportSnapshotSetRequest(BaseModel):
+    department_name: str = Field(..., description="Department/salon name, e.g. 'Ленина' or 'Ленина, 7'.")
+    filename: str = Field(..., description="Original filename (e.g. remainGoodsReport (22).xls).")
+    file_base64: str = Field(..., description="Base64-encoded remainGoodsReport file bytes (.xls/.xlsx/.csv).")
+
+
+class RemainGoodsReportSnapshotInfo(BaseModel):
+    department_id: int
+    department_name: str
+    stored_at_unix: int
+    expires_at_unix: int
+    filename: str
+    rows_count: int
+
+
+REMAINGOODS_SNAPSHOT_TTL_SECONDS = int(os.getenv("REMAINGOODS_SNAPSHOT_TTL_SECONDS", str(24 * 60 * 60)))
+# In-memory snapshot cache (Render dynos may restart; this is MVP-grade).
+_contactlenses_report_snapshots: Dict[int, Dict[str, Any]] = {}
 
 
 def csv_bytes_to_rows(raw: bytes) -> List[Dict[str, Any]]:
@@ -842,6 +863,27 @@ def remain_goods_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def parse_remain_goods_by_filename(filename: str, raw: bytes) -> List[Dict[str, Any]]:
+    low = (filename or "").lower()
+    if low.endswith(".csv"):
+        return parse_remain_goods_csv(raw)
+    if low.endswith(".xlsx"):
+        return parse_remain_goods_xlsx(raw)
+    if low.endswith(".xls"):
+        return parse_remain_goods_xls(raw)
+    raise HTTPException(status_code=400, detail="unsupported_report_file_type")
+
+
+def get_snapshot(department_id: int) -> Optional[Dict[str, Any]]:
+    snap = _contactlenses_report_snapshots.get(department_id)
+    if not snap:
+        return None
+    if int(time.time()) >= int(snap["expires_at_unix"]):
+        _contactlenses_report_snapshots.pop(department_id, None)
+        return None
+    return snap
+
+
 def rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str = "Remains") -> bytes:
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {"in_memory": True})
@@ -1329,6 +1371,107 @@ async def contactlenses_remain_goods_report_analyze_base64(
             "ITigris remoteRemains is an API snapshot and may undercount open packs."
         ),
     }
+
+
+@app.post("/contactlenses/remainGoodsReport/snapshot/set")
+async def contactlenses_remain_goods_report_snapshot_set(
+    request: Request,
+    body: RemainGoodsReportSnapshotSetRequest,
+) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    dep_id = normalize_department(None, body.department_name)
+    if not dep_id:
+        raise HTTPException(status_code=400, detail="unknown_department")
+
+    try:
+        raw = base64.b64decode(body.file_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_base64")
+    if len(raw) > 30_000_000:
+        raise HTTPException(status_code=413, detail="report_file_too_large")
+
+    rows = parse_remain_goods_by_filename(body.filename, raw)
+    totals = remain_goods_totals(rows)
+    now = int(time.time())
+    expires = now + REMAINGOODS_SNAPSHOT_TTL_SECONDS
+    _contactlenses_report_snapshots[dep_id] = {
+        "department_id": dep_id,
+        "department_name": body.department_name,
+        "stored_at_unix": now,
+        "expires_at_unix": expires,
+        "filename": body.filename,
+        "rows_count": len(rows),
+        "summary": totals,
+    }
+    return {
+        "ok": True,
+        "snapshot": RemainGoodsReportSnapshotInfo(
+            department_id=dep_id,
+            department_name=body.department_name,
+            stored_at_unix=now,
+            expires_at_unix=expires,
+            filename=body.filename,
+            rows_count=len(rows),
+        ).model_dump(),
+        "summary": totals,
+    }
+
+
+@app.get("/contactlenses/stock/{department_name}")
+async def contactlenses_stock(
+    request: Request,
+    department_name: str,
+    source: str = Query("auto", description="auto|snapshot|api"),
+) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    dep_id = normalize_department(None, department_name)
+    if not dep_id:
+        return JSONResponse({"error": "unknown_department"}, status_code=400)
+
+    if source in {"auto", "snapshot"}:
+        snap = get_snapshot(dep_id)
+        if snap:
+            return {
+                "category": "contactlenses",
+                "department": department_name,
+                "source": "remainGoodsReport snapshot (truth for packs/units/value; includes open packs)",
+                "snapshot": {
+                    "department_id": snap["department_id"],
+                    "department_name": snap["department_name"],
+                    "stored_at_unix": snap["stored_at_unix"],
+                    "expires_at_unix": snap["expires_at_unix"],
+                    "filename": snap["filename"],
+                    "rows_count": snap["rows_count"],
+                },
+                "summary": snap["summary"],
+            }
+        if source == "snapshot":
+            return JSONResponse(
+                {
+                    "error": "snapshot_missing",
+                    "detail": "No remainGoodsReport snapshot stored for this department. Upload it via /contactlenses/remainGoodsReport/snapshot/set.",
+                },
+                status_code=404,
+            )
+
+    if source in {"auto", "api"}:
+        body = RemainsFilteredRequest(category="contactlenses", department_name=department_name, return_items=False, items_limit=0)
+        api_result = await remains_filtered(request, body)
+        if isinstance(api_result, JSONResponse):
+            return api_result
+        api_result["warning"] = (
+            "remoteRemains is an API snapshot. For contact lenses it may undercount open packs and does not provide exact units. "
+            "For exact packs+units+sum use remainGoodsReport snapshot."
+        )
+        return api_result
+
+    return JSONResponse({"error": "bad_source", "allowed": ["auto", "snapshot", "api"]}, status_code=400)
 
 
 @app.get("/openapi.json", include_in_schema=False)
