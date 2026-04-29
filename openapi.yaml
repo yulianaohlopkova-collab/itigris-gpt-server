@@ -258,6 +258,32 @@ paths:
                   data_sources:
                     type: object
 
+  /sales/analyze-csv:
+    post:
+      operationId: salesAnalyzeCsv
+      summary: Сформировать weekly output из CSV текста (JSON)
+      description: >
+        Подходит для GPT Actions: передай содержимое CSV как строки в JSON.
+        Обязателен только sales_period_csv, остальные поля опциональны.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SalesAnalyzeCsvRequest"
+      responses:
+        "200":
+          description: Markdown report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report_markdown:
+                    type: string
+                  data_sources:
+                    type: object
+
 components:
   securitySchemes:
     OdlServerToken:
@@ -325,3 +351,27 @@ components:
           default: 0
           minimum: 0
           maximum: 1000
+
+    SalesAnalyzeCsvRequest:
+      type: object
+      required: [sales_period_csv]
+      properties:
+        sales_period_csv:
+          type: string
+          description: CSV content for sales_period.csv (UTF-8).
+        plan_fact_csv:
+          type: string
+          nullable: true
+          description: CSV content for plan_fact.csv (optional).
+        employees_csv:
+          type: string
+          nullable: true
+          description: CSV content for employees.csv (optional).
+        categories_csv:
+          type: string
+          nullable: true
+          description: CSV content for categories.csv (optional).
+        training_csv:
+          type: string
+          nullable: true
+          description: CSV content for training.csv (optional).

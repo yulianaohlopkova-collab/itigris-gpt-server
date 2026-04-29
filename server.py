@@ -278,8 +278,21 @@ class SalesAnalyzeRequest(BaseModel):
     data: Optional[Dict[str, List[Dict[str, Any]]]] = None
 
 
+class SalesAnalyzeCsvRequest(BaseModel):
+    sales_period_csv: str = Field(..., description="CSV content for sales_period.csv (UTF-8).")
+    plan_fact_csv: Optional[str] = Field(default=None, description="CSV content for plan_fact.csv (optional).")
+    employees_csv: Optional[str] = Field(default=None, description="CSV content for employees.csv (optional).")
+    categories_csv: Optional[str] = Field(default=None, description="CSV content for categories.csv (optional).")
+    training_csv: Optional[str] = Field(default=None, description="CSV content for training.csv (optional).")
+
+
 def csv_bytes_to_rows(raw: bytes) -> List[Dict[str, Any]]:
     text = raw.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    return [dict(row) for row in reader]
+
+
+def csv_text_to_rows(text: str) -> List[Dict[str, Any]]:
     reader = csv.DictReader(io.StringIO(text))
     return [dict(row) for row in reader]
 
@@ -768,6 +781,22 @@ async def sales_analyze_upload(
         "employees": await load_csv_upload(employees, required=False),
         "categories": await load_csv_upload(categories, required=False),
         "training": await load_csv_upload(training, required=False),
+    }
+    return analyze_dataset(dataset)
+
+
+@app.post("/sales/analyze-csv")
+async def sales_analyze_csv(request: Request, body: SalesAnalyzeCsvRequest) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    dataset = {
+        "sales_period": csv_text_to_rows(body.sales_period_csv),
+        "plan_fact": csv_text_to_rows(body.plan_fact_csv) if body.plan_fact_csv else [],
+        "employees": csv_text_to_rows(body.employees_csv) if body.employees_csv else [],
+        "categories": csv_text_to_rows(body.categories_csv) if body.categories_csv else [],
+        "training": csv_text_to_rows(body.training_csv) if body.training_csv else [],
     }
     return analyze_dataset(dataset)
 
