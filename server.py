@@ -4,6 +4,7 @@ import csv
 import base64
 import io
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,6 +42,9 @@ ODL_SERVER_TOKEN = os.getenv("ODL_SERVER_TOKEN", "").strip()
 SERVER_URL = os.getenv("PUBLIC_SERVER_URL", "https://itigris-gpt-server.onrender.com").strip()
 TIMEOUT = float(os.getenv("ITIGRIS_TIMEOUT", "40"))
 REMOTE_REMAINS_URL = f"https://optima.itigris.ru/{APP_NAME}/remoteRemains/list"
+
+REMAINGOODS_AUTO_FETCH_URL_TEMPLATE = os.getenv("ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE", "").strip()
+REMAINGOODS_AUTO_REFRESH_MIN_SECONDS = int(os.getenv("REMAINGOODS_AUTO_REFRESH_MIN_SECONDS", "600"))
 
 
 DEPARTMENTS: Dict[str, int] = {
@@ -323,6 +327,13 @@ REMAINGOODS_SNAPSHOT_TTL_SECONDS = int(os.getenv("REMAINGOODS_SNAPSHOT_TTL_SECON
 # In-memory snapshot cache (Render dynos may restart; this is MVP-grade).
 _contactlenses_report_snapshots: Dict[int, Dict[str, Any]] = {}
 _contactlenses_report_global_snapshot: Optional[Dict[str, Any]] = None
+_contactlenses_auto_fetch_state: Dict[str, Any] = {
+    "last_attempt_unix": None,
+    "last_success_unix": None,
+    "last_error": None,
+    "last_error_at_unix": None,
+    "last_filename": None,
+}
 
 
 def csv_bytes_to_rows(raw: bytes) -> List[Dict[str, Any]]:
@@ -900,6 +911,139 @@ def get_global_snapshot() -> Optional[Dict[str, Any]]:
         _contactlenses_report_global_snapshot = None
         return None
     return snap
+
+
+def _render_itigris_url(template: str) -> str:
+    # Supported placeholders: {app}, {key}, {external_key}
+    return template.format(app=APP_NAME, key=REMOTE_API_KEY, external_key=EXTERNAL_API_KEY)
+
+
+def _guess_filename_from_content_disposition(headers: httpx.Headers) -> Optional[str]:
+    cd = headers.get("content-disposition") or headers.get("Content-Disposition")
+    if not cd:
+        return None
+    m = re.search(r"filename\\*=UTF-8''([^;]+)", cd, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'filename=\"?([^\";]+)\"?', cd, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+async def _auto_fetch_remain_goods_report_bytes() -> Tuple[Optional[str], Optional[bytes], Optional[str]]:
+    """
+    Returns: (filename, raw_bytes, error_code)
+    """
+    if not REMAINGOODS_AUTO_FETCH_URL_TEMPLATE:
+        return None, None, "auto_fetch_not_configured"
+    if not REMOTE_API_KEY and ("{key}" in REMAINGOODS_AUTO_FETCH_URL_TEMPLATE):
+        return None, None, "remote_api_key_missing"
+
+    url = _render_itigris_url(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+            resp = await client.get(url)
+    except Exception:
+        return None, None, "auto_fetch_network_error"
+
+    if resp.status_code != 200:
+        return None, None, f"auto_fetch_http_{resp.status_code}"
+
+    raw = resp.content
+    if not raw:
+        return None, None, "auto_fetch_empty_response"
+    if len(raw) > 30_000_000:
+        return None, None, "auto_fetch_file_too_large"
+
+    filename = _guess_filename_from_content_disposition(resp.headers)
+    return filename, raw, None
+
+
+def _parse_remain_goods_report_auto(filename: Optional[str], raw: bytes) -> Tuple[str, List[Dict[str, Any]]]:
+    fn = (filename or "").lower()
+    if fn.endswith(".csv"):
+        return filename or "remainGoodsReport.csv", parse_remain_goods_csv(raw)
+    if fn.endswith(".xlsx"):
+        return filename or "remainGoodsReport.xlsx", parse_remain_goods_xlsx(raw)
+    if fn.endswith(".xls"):
+        return filename or "remainGoodsReport.xls", parse_remain_goods_xls(raw)
+
+    # Heuristic fallback: try XLS, then XLSX, then CSV.
+    try:
+        return (filename or "remainGoodsReport.xls"), parse_remain_goods_xls(raw)
+    except Exception:
+        pass
+    try:
+        return (filename or "remainGoodsReport.xlsx"), parse_remain_goods_xlsx(raw)
+    except Exception:
+        pass
+    return (filename or "remainGoodsReport.csv"), parse_remain_goods_csv(raw)
+
+
+async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dict[str, Any]:
+    """
+    Best-effort refresh of global snapshot from ITigris report export URL.
+    """
+    now = int(time.time())
+    _contactlenses_auto_fetch_state["last_attempt_unix"] = now
+
+    if not REMAINGOODS_AUTO_FETCH_URL_TEMPLATE:
+        _contactlenses_auto_fetch_state["last_error"] = "auto_fetch_not_configured"
+        _contactlenses_auto_fetch_state["last_error_at_unix"] = now
+        return {"ok": False, "error": "auto_fetch_not_configured"}
+
+    global_snap = get_global_snapshot()
+    if not force and global_snap:
+        age = now - int(global_snap["stored_at_unix"])
+        if age < REMAINGOODS_AUTO_REFRESH_MIN_SECONDS:
+            return {"ok": True, "skipped": True, "reason": "recent_snapshot"}
+
+    filename, raw, err = await _auto_fetch_remain_goods_report_bytes()
+    if err or not raw:
+        _contactlenses_auto_fetch_state["last_error"] = err or "auto_fetch_failed"
+        _contactlenses_auto_fetch_state["last_error_at_unix"] = now
+        return {"ok": False, "error": err or "auto_fetch_failed"}
+
+    try:
+        resolved_filename, rows = _parse_remain_goods_report_auto(filename, raw)
+        overall = remain_goods_totals(rows, prefer_summary_row=True)
+        by_dep = remain_goods_totals_by_department(rows)
+    except HTTPException as e:
+        _contactlenses_auto_fetch_state["last_error"] = f"parse_error_{e.detail}"
+        _contactlenses_auto_fetch_state["last_error_at_unix"] = now
+        return {"ok": False, "error": f"parse_error_{e.detail}"}
+    except Exception:
+        _contactlenses_auto_fetch_state["last_error"] = "parse_error_unknown"
+        _contactlenses_auto_fetch_state["last_error_at_unix"] = now
+        return {"ok": False, "error": "parse_error_unknown"}
+
+    expires = now + REMAINGOODS_SNAPSHOT_TTL_SECONDS
+    global _contactlenses_report_global_snapshot
+    _contactlenses_report_global_snapshot = {
+        "stored_at_unix": now,
+        "expires_at_unix": expires,
+        "filename": resolved_filename,
+        "rows_count": len(rows),
+        "overall_summary": overall,
+        "by_department": by_dep,
+    }
+
+    _contactlenses_auto_fetch_state["last_success_unix"] = now
+    _contactlenses_auto_fetch_state["last_error"] = None
+    _contactlenses_auto_fetch_state["last_error_at_unix"] = None
+    _contactlenses_auto_fetch_state["last_filename"] = resolved_filename
+
+    return {
+        "ok": True,
+        "skipped": False,
+        "stored_at_unix": now,
+        "expires_at_unix": expires,
+        "filename": resolved_filename,
+        "rows_count": len(rows),
+        "departments_count": len(by_dep),
+        "overall_summary": overall,
+    }
 
 
 def remain_goods_totals_by_department(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -1498,6 +1642,44 @@ async def contactlenses_remain_goods_report_snapshot_set_global(
     }
 
 
+@app.get("/contactlenses/remainGoodsReport/auto/status")
+async def contactlenses_remain_goods_report_auto_status(request: Request) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    global_snap = get_global_snapshot()
+    return {
+        "auto_fetch_configured": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE),
+        "auto_refresh_min_seconds": REMAINGOODS_AUTO_REFRESH_MIN_SECONDS,
+        "remote_api_key_configured": bool(REMOTE_API_KEY),
+        "external_api_key_configured": bool(EXTERNAL_API_KEY),
+        "state": dict(_contactlenses_auto_fetch_state),
+        "global_snapshot_present": bool(global_snap),
+        "global_snapshot": (
+            {
+                "stored_at_unix": global_snap["stored_at_unix"],
+                "expires_at_unix": global_snap["expires_at_unix"],
+                "filename": global_snap["filename"],
+                "rows_count": global_snap["rows_count"],
+                "departments_count": len(global_snap["by_department"]),
+            }
+            if global_snap
+            else None
+        ),
+    }
+
+
+@app.post("/contactlenses/remainGoodsReport/auto/refresh")
+async def contactlenses_remain_goods_report_auto_refresh(request: Request, force: bool = Query(False)) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    status = await maybe_refresh_global_snapshot_from_itigris(force=force)
+    if not status.get("ok"):
+        raise HTTPException(status_code=502, detail=status.get("error") or "auto_refresh_failed")
+    return status
+
+
 @app.get("/contactlenses/stock/{department_name}")
 async def contactlenses_stock(
     request: Request,
@@ -1513,6 +1695,10 @@ async def contactlenses_stock(
         return JSONResponse({"error": "unknown_department"}, status_code=400)
 
     if source in {"auto", "snapshot"}:
+        # 0) Best-effort refresh from ITigris export URL (if configured).
+        if source == "auto" and REMAINGOODS_AUTO_FETCH_URL_TEMPLATE:
+            await maybe_refresh_global_snapshot_from_itigris(force=False)
+
         # 1) Prefer global snapshot (single upload for all departments).
         global_snap = get_global_snapshot()
         if global_snap:

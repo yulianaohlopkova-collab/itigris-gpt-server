@@ -424,13 +424,52 @@ paths:
               schema:
                 type: object
 
+  /contactlenses/remainGoodsReport/auto/status:
+    get:
+      operationId: contactlensesRemainGoodsReportAutoStatus
+      summary: Статус авто-подтягивания remainGoodsReport из ITigris
+      description: >
+        Показывает, настроен ли авто-fetch (Render env `ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE`),
+        и есть ли сейчас global snapshot.
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /contactlenses/remainGoodsReport/auto/refresh:
+    post:
+      operationId: contactlensesRemainGoodsReportAutoRefresh
+      summary: Обновить global snapshot remainGoodsReport из ITigris (без ручной загрузки)
+      description: >
+        Сервер попробует скачать актуальный remainGoodsReport по URL-шаблону из Render env
+        `ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE`, распарсить и обновить global snapshot.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Snapshot refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+
   /contactlenses/stock/{department_name}:
     get:
       operationId: contactlensesStock
       summary: Остаток МКЛ по департаменту (snapshot truth, fallback API)
       description: >
-        Если есть сохраненный snapshot remainGoodsReport — вернет точный packs/units/value.
-        Если snapshot нет — вернет remoteRemains snapshot (approximate) и предупреждение.
+        Порядок источников в режиме `source=auto`:
+        1) если настроен авто-fetch remainGoodsReport (см. /contactlenses/remainGoodsReport/auto/*) — best-effort обновит global snapshot;
+        2) если есть global/per-department snapshot remainGoodsReport — вернет точный packs/units/value;
+        3) иначе вернет remoteRemains snapshot (approximate) и предупреждение.
       parameters:
         - name: department_name
           in: path

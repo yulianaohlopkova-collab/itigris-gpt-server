@@ -30,6 +30,8 @@ Environment:
 - `ITIGRIS_REMOTE_API_KEY` или `ITIGRIS_API_KEY`
 - `ITIGRIS_EXTERNAL_API_KEY` optional
 - `ODL_SERVER_TOKEN`
+- `ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE` optional (auto-fetch remainGoodsReport для точных остатков МКЛ)
+- `REMAINGOODS_AUTO_REFRESH_MIN_SECONDS` optional (default 600)
 
 ## Реальный прогон MVP
 
@@ -57,3 +59,19 @@ python scripts/run_weekly_report.py
 - `/sales/analyze`
 
 Важно: ITigris `remoteRemains` — это остатки, не продажи.
+
+## Contact lenses (МКЛ): точные остатки
+
+`remoteRemains` по МКЛ не отдает "шт" и может недосчитывать открытые упаковки. Для точного ответа (упаковки / штуки / сумма)
+используется выгрузка `remainGoodsReport`:
+
+- `POST /contactlenses/remainGoodsReport/analyze` (multipart .xls/.xlsx/.csv)
+- `POST /contactlenses/remainGoodsReport/analyze-csv` (JSON, GPT-friendly)
+- `POST /contactlenses/remainGoodsReport/analyze-base64` (JSON, GPT-friendly)
+
+Чтобы убрать ручную загрузку snapshot, можно настроить авто-подтягивание отчета:
+
+1. В Render env задать `ITIGRIS_REMAINGOODSREPORT_URL_TEMPLATE` (URL-шаблон экспорта, поддерживает `{app}`, `{key}`, `{external_key}`).
+2. Вызывать `POST /contactlenses/remainGoodsReport/auto/refresh` (или просто `GET /contactlenses/stock/{department_name}?source=auto`).
+
+Проверка: `GET /contactlenses/remainGoodsReport/auto/status`.
