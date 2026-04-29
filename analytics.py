@@ -7,6 +7,70 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 Dataset = Dict[str, List[Dict[str, Any]]]
 
+CSV_KEY_ALIASES: Dict[str, str] = {
+    # Common identity fields
+    "period_start": "period_start",
+    "period end": "period_end",
+    "period_end": "period_end",
+    "start": "period_start",
+    "end": "period_end",
+    "дата начала": "period_start",
+    "начало": "period_start",
+    "дата конца": "period_end",
+    "конец": "period_end",
+    "salon": "salon",
+    "store": "salon",
+    "department": "salon",
+    "департамент": "salon",
+    "салон": "salon",
+    "category": "category",
+    "категория": "category",
+    "товарная категория": "category",
+
+    # Sales measures (the priority fields user requested)
+    "revenue": "revenue",
+    "выручка": "revenue",
+    "сумма": "revenue",
+    "сумма продаж": "revenue",
+    "sales_revenue": "revenue",
+    "amount": "revenue",
+    "руб": "revenue",
+
+    "qty_units": "qty_units",
+    "units": "qty_units",
+    "unit_qty": "qty_units",
+    "qty": "qty_units",
+    "quantity": "qty_units",
+    "шт": "qty_units",
+    "штук": "qty_units",
+    "кол-во штук": "qty_units",
+    "количество штук": "qty_units",
+
+    "qty_packs": "qty_packs",
+    "packs": "qty_packs",
+    "pack_qty": "qty_packs",
+    "упаковки": "qty_packs",
+    "упак": "qty_packs",
+    "кол-во упаковок": "qty_packs",
+    "количество упаковок": "qty_packs",
+}
+
+CATEGORY_ALIASES: Dict[str, str] = {
+    "contactlenses": "contactlenses",
+    "contact lenses": "contactlenses",
+    "контактные линзы": "contactlenses",
+    "мкл": "contactlenses",
+    "кл": "contactlenses",
+    "glasses": "glasses",
+    "оправы": "glasses",
+    "frames": "glasses",
+    "lenses": "lenses",
+    "ол": "lenses",
+    "очковые линзы": "lenses",
+    "sunglasses": "sunglasses",
+    "солнцезащитные очки": "sunglasses",
+}
+
 
 def parse_number(value: Any) -> Optional[float]:
     if value is None:
@@ -61,6 +125,35 @@ def load_input_folder(input_dir: Path) -> Dataset:
         "categories": read_csv_rows(input_dir / "categories.csv"),
         "training": read_csv_rows(input_dir / "training.csv"),
     }
+
+
+def normalize_key(key: str) -> str:
+    raw = str(key or "").strip()
+    if not raw:
+        return raw
+    low = raw.lower()
+    return CSV_KEY_ALIASES.get(low, CSV_KEY_ALIASES.get(raw, raw))
+
+
+def normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in row.items():
+        nk = normalize_key(k)
+        if nk and nk not in out:
+            out[nk] = v
+        else:
+            out[k] = v
+    cat = out.get("category")
+    if isinstance(cat, str) and cat.strip():
+        out["category"] = CATEGORY_ALIASES.get(cat.strip().lower(), cat.strip())
+    return out
+
+
+def normalize_dataset(data: Dataset) -> Dataset:
+    normalized: Dataset = {}
+    for name, rows in data.items():
+        normalized[name] = [normalize_row(row) for row in rows]
+    return normalized
 
 
 def first_period(data: Dataset) -> Tuple[str, str]:
@@ -131,6 +224,36 @@ def category_lookup(rows: List[Dict[str, Any]], category: str, salon: str = "О�
     return {}
 
 
+def category_totals(rows: List[Dict[str, Any]], category_code: str) -> Dict[str, Any]:
+    # Prefer network totals row if present; otherwise sum across salons.
+    network = category_lookup(rows, category_code)
+    if network:
+        return network
+
+    revenue = 0.0
+    qty_units = 0.0
+    qty_packs = 0.0
+    found_any = False
+    for row in rows:
+        if row.get("category") != category_code:
+            continue
+        r = parse_number(row.get("revenue"))
+        u = parse_number(row.get("qty_units"))
+        p = parse_number(row.get("qty_packs"))
+        if r is not None:
+            revenue += r
+            found_any = True
+        if u is not None:
+            qty_units += u
+            found_any = True
+        if p is not None:
+            qty_packs += p
+            found_any = True
+    if not found_any:
+        return {}
+    return {"category": category_code, "salon": "network_sum", "revenue": revenue, "qty_units": qty_units, "qty_packs": qty_packs}
+
+
 def top_employee_lines(rows: List[Dict[str, Any]]) -> Tuple[List[str], List[str], List[str]]:
     eligible = [r for r in rows if (num(r, "orders") or 0) >= 5]
     top_revenue = sort_rows(eligible, "revenue", reverse=True)[:5]
@@ -161,11 +284,12 @@ def bulletize(lines: List[str], fallback: str = "нет данных") -> str:
 
 
 def analyze_dataset(data: Dataset) -> Dict[str, Any]:
-    report = build_report(data)
+    normalized = normalize_dataset(data)
+    report = build_report(normalized)
     return {
         "report_markdown": report,
         "data_sources": {
-            name: len(rows) for name, rows in data.items()
+            name: len(rows) for name, rows in normalized.items()
         },
     }
 
@@ -194,6 +318,7 @@ def build_report(data: Dataset) -> str:
     myopia = category_lookup(categories, "myopia_control_lenses_qty")
     multifocal = category_lookup(categories, "multifocal_lenses_qty")
     lens_high = category_lookup(categories, "lenses_above_15000_qty")
+    contact_sales = category_totals(categories, "contactlenses")
 
     limitations = [
         "ITigris remoteRemains дает остатки и товарную структуру, а не полную продажную аналитику.",
@@ -336,7 +461,12 @@ def build_report(data: Dataset) -> str:
             + bulletize([
                 f"Better/Best ОЛ: факт {fmt_qty(better_best.get('fact'))} против плана {fmt_qty(better_best.get('plan'))}.",
                 f"Мультифокальные ОЛ: факт {fmt_qty(multifocal.get('fact'))}, отклонение {fmt_pct(multifocal.get('variance_pct'))}.",
-                f"МКЛ: в заказах есть сумма продаж, но нет детальной структуры по параметрам линз в текущем sales input.",
+                (
+                    f"МКЛ (продажи из CSV): выручка {fmt_money(contact_sales.get('revenue'))}, "
+                    f"упаковок {fmt_qty(contact_sales.get('qty_packs'))}, штук {fmt_qty(contact_sales.get('qty_units'))}."
+                    if contact_sales else
+                    "МКЛ: нет явных колонок qty_packs/qty_units/revenue в sales CSV (или категория не промапилась на contactlenses)."
+                ),
             ])
         ),
         "## 4. Точки роста\n" + bulletize(growth_lines + top_employee),

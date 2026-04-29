@@ -358,7 +358,10 @@ components:
       properties:
         sales_period_csv:
           type: string
-          description: CSV content for sales_period.csv (UTF-8).
+          description: >
+            CSV content for sales_period.csv (UTF-8). Для категорийных продаж (например МКЛ)
+            рекомендуемые канонические колонки: salon, category, revenue, qty_units, qty_packs.
+            Русские заголовки тоже поддерживаются (например "выручка", "штук", "упаковки").
         plan_fact_csv:
           type: string
           nullable: true
@@ -370,7 +373,10 @@ components:
         categories_csv:
           type: string
           nullable: true
-          description: CSV content for categories.csv (optional).
+          description: >
+            CSV content for categories.csv (optional). Для корректного расчета продаж используйте:
+            revenue (выручка), qty_units (штуки), qty_packs (упаковки). category для МКЛ должен
+            быть contactlenses / "контактные линзы" / "МКЛ".
         training_csv:
           type: string
           nullable: true
