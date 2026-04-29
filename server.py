@@ -981,6 +981,7 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
     required_keys = {"qty_packs", "qty_units", "remaining_in_pack", "in_pack", "value"}
     tables = soup.find_all("table")
     best: Optional[Tuple[List[str], Any]] = None
+    debug_tables: List[Dict[str, Any]] = []
     for table in tables:
         # Find first row that looks like header.
         rows = table.find_all("tr")
@@ -988,6 +989,7 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
             continue
         header_row = None
         header_cells: List[str] = []
+        candidates: List[Dict[str, Any]] = []
         for tr in rows[:30]:
             cells = tr.find_all(["th", "td"])
             if not cells:
@@ -1004,17 +1006,27 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
                 "unit_price": find_col_index(norms, REMAINGOODS_HEADERS_NORM["unit_price"]),
             }
             present = {k for k, v in idx.items() if v is not None}
+            candidates.append({"cells": texts[:20], "present_keys": sorted(present)})
             if required_keys.issubset(present):
                 header_row = tr
                 header_cells = texts
                 break
         if not header_row:
+            if candidates:
+                debug_tables.append({"candidates": candidates[:5]})
             continue
         best = (header_cells, table)
         break
 
     if not best:
-        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "remainGoodsReport_missing_required_columns",
+                "tables_found": len(tables),
+                "debug_tables": debug_tables[:3],
+            },
+        )
 
     header_cells, table = best
     headers = [normalize_header(h) for h in header_cells]
@@ -1127,9 +1139,48 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
     }
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
         resp = await client.post(url, data=form, headers=headers)
+    content_type = (resp.headers.get("content-type") or "").lower()
+    text_snippet = resp.text[:2000] if resp.text else ""
+    looks_like_login = any(
+        marker in (resp.text or "").lower()
+        for marker in [
+            "jsessionid",
+            "login",
+            "авторизац",
+            "войти",
+            "password",
+            "username",
+            "j_username",
+            "j_password",
+        ]
+    ) and ("remainGoodsReport" not in (resp.text or ""))
+
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"auto_web_http_{resp.status_code}")
-    rows = _parse_remain_goods_html(resp.content)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": f"auto_web_http_{resp.status_code}",
+                "status_code": resp.status_code,
+                "content_type": content_type,
+                "looks_like_login_page": looks_like_login,
+                "html_snippet": text_snippet,
+            },
+        )
+
+    try:
+        rows = _parse_remain_goods_html(resp.content)
+    except HTTPException as e:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "auto_web_parse_failed",
+                "status_code": resp.status_code,
+                "content_type": content_type,
+                "looks_like_login_page": looks_like_login,
+                "html_snippet": text_snippet,
+                "parser_detail": e.detail,
+            },
+        )
     return f"remainGoodsReport_reportPage_{date_ddmmyyyy}.html", rows
 
 
@@ -1192,9 +1243,10 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         overall = remain_goods_totals(rows, prefer_summary_row=True)
         by_dep = remain_goods_totals_by_department(rows)
     except HTTPException as e:
-        _contactlenses_auto_fetch_state["last_error"] = f"parse_error_{e.detail}"
+        # Keep the detail for debugging (can be dict).
+        _contactlenses_auto_fetch_state["last_error"] = e.detail
         _contactlenses_auto_fetch_state["last_error_at_unix"] = now
-        return {"ok": False, "error": f"parse_error_{e.detail}"}
+        return {"ok": False, "error": "auto_refresh_failed", "debug": e.detail}
     except Exception:
         _contactlenses_auto_fetch_state["last_error"] = "parse_error_unknown"
         _contactlenses_auto_fetch_state["last_error_at_unix"] = now
@@ -1863,7 +1915,8 @@ async def contactlenses_remain_goods_report_auto_refresh(request: Request, force
         return auth_err
     status = await maybe_refresh_global_snapshot_from_itigris(force=force)
     if not status.get("ok"):
-        raise HTTPException(status_code=502, detail=status.get("error") or "auto_refresh_failed")
+        # Return debug payload to quickly fix cookie/login/export parsing issues.
+        raise HTTPException(status_code=502, detail=status)
     return status
 
 
