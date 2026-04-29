@@ -1,75 +1,38 @@
 openapi: 3.1.0
 info:
-  title: Optima Assistant API
-  description: API для аналитики остатков оптики (Итигрис)
-  version: "2.2.0"
-
+  title: ODL Sales Analyst MVP API
+  version: "3.0.0"
+  description: >
+    MVP API для «Очкидалинзы»: ITigris remoteRemains используется только для
+    остатков и товарной структуры, продажи анализируются из DataLens/Google
+    Sheets/CSV input.
 servers:
   - url: https://itigris-gpt-server.onrender.com
 
-paths:
+security:
+  - OdlServerToken: []
 
+paths:
   /healthz:
     get:
       operationId: healthCheck
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
+      security: []
+      summary: Проверить, что сервер жив
       responses:
         "200":
-          description: Server status
+          description: OK
           content:
             application/json:
               schema:
                 type: object
-  /count-real/{category}:
-    get:
-      operationId: countReal
-      summary: Получить реальное количество (через remoteRemains)
 
-      parameters:
-
-        - name: category
-          in: path
-          required: true
-          schema:
-            type: string
-
-        - name: department_name
-          in: query
-          required: true
-          schema:
-            type: string
-
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
-
-      responses:
-        "200":
-          description: Total quantity from remoteRemains
-          content:
-            application/json:
-              schema:
-                type: object
-                
   /departments:
     get:
       operationId: getDepartments
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
+      summary: Список департаментов и алиасов
       responses:
         "200":
-          description: List of departments
+          description: Departments
           content:
             application/json:
               schema:
@@ -78,15 +41,83 @@ paths:
   /categories:
     get:
       operationId: getCategories
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
+      summary: Категории ITigris и допустимые фильтры
       responses:
         "200":
-          description: List of categories
+          description: Categories
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /remains-filtered:
+    post:
+      operationId: remainsFiltered
+      summary: Остатки ITigris remoteRemains с фильтрами
+      description: >
+        Возвращает остатки, количество и стоимость. Это не продажи.
+        Для МКЛ используйте category=contactlenses и фильтры manufacturer,
+        name, color, radius, diameter, dioptre, cylinder, axis, add,
+        wearingPeriod, inPack.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemainsFilteredRequest"
+      responses:
+        "200":
+          description: Remains summary
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /count-by-filters:
+    post:
+      operationId: countByFilters
+      summary: Посчитать остатки по категории, группе/салону и фильтрам
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemainsFilteredRequest"
+      responses:
+        "200":
+          description: Count summary
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /count-by-price/{category}:
+    get:
+      operationId: countByPrice
+      summary: Посчитать остатки по ценовому диапазону
+      parameters:
+        - $ref: "#/components/parameters/CategoryPath"
+        - $ref: "#/components/parameters/DepartmentId"
+        - $ref: "#/components/parameters/DepartmentName"
+        - $ref: "#/components/parameters/Group"
+        - name: min_price
+          in: query
+          schema:
+            type: number
+        - name: max_price
+          in: query
+          schema:
+            type: number
+        - name: limit_items
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 0
+            maximum: 500
+      responses:
+        "200":
+          description: Count by price
           content:
             application/json:
               schema:
@@ -95,41 +126,15 @@ paths:
   /count/{category}:
     get:
       operationId: countCategory
+      summary: Посчитать все остатки категории
       parameters:
-
-        - name: category
-          in: path
-          required: true
-          schema:
-            type: string
-
-        - name: department_id
-          in: query
-          required: false
-          schema:
-            type: integer
-
-        - name: department_name
-          in: query
-          required: false
-          schema:
-            type: string
-
-        - name: group
-          in: query
-          required: false
-          schema:
-            type: string
-
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
-
+        - $ref: "#/components/parameters/CategoryPath"
+        - $ref: "#/components/parameters/DepartmentId"
+        - $ref: "#/components/parameters/DepartmentName"
+        - $ref: "#/components/parameters/Group"
       responses:
         "200":
-          description: Count of items
+          description: Category count
           content:
             application/json:
               schema:
@@ -138,29 +143,15 @@ paths:
   /breakdown/{category}:
     get:
       operationId: breakdownCategory
+      summary: Структура остатков по полям категории
       parameters:
-
-        - name: category
-          in: path
-          required: true
-          schema:
-            type: string
-
-        - name: department_name
-          in: query
-          required: false
-          schema:
-            type: string
-
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
-
+        - $ref: "#/components/parameters/CategoryPath"
+        - $ref: "#/components/parameters/DepartmentId"
+        - $ref: "#/components/parameters/DepartmentName"
+        - $ref: "#/components/parameters/Group"
       responses:
         "200":
-          description: Breakdown of category
+          description: Breakdown
           content:
             application/json:
               schema:
@@ -169,30 +160,125 @@ paths:
   /gpt/breakdown/{category}:
     get:
       operationId: gptBreakdown
+      summary: Компактная структура остатков для GPT Actions
       parameters:
-
-        - name: category
-          in: path
-          required: true
-          schema:
-            type: string
-
-        - name: department_name
+        - $ref: "#/components/parameters/CategoryPath"
+        - $ref: "#/components/parameters/DepartmentId"
+        - $ref: "#/components/parameters/DepartmentName"
+        - $ref: "#/components/parameters/Group"
+        - name: top_n
           in: query
-          required: false
           schema:
-            type: string
-
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
-
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 30
       responses:
         "200":
-          description: GPT optimized breakdown
+          description: GPT compact breakdown
           content:
             application/json:
               schema:
                 type: object
+
+  /sales/analyze:
+    post:
+      operationId: salesAnalyze
+      summary: Сформировать MVP weekly output по продажам
+      description: >
+        Принимает JSON dataset или использует data/input на сервере. Output
+        возвращается в markdown с сигналами, проблемами, гипотезами и фокусом
+        для Коммерческого директора и Тренеров.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: object
+                  additionalProperties:
+                    type: array
+                    items:
+                      type: object
+      responses:
+        "200":
+          description: Markdown report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report_markdown:
+                    type: string
+                  data_sources:
+                    type: object
+
+components:
+  securitySchemes:
+    OdlServerToken:
+      type: apiKey
+      in: header
+      name: X-ODL-Token
+
+  parameters:
+    CategoryPath:
+      name: category
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [accessories, contactlenses, glasses, lenses, sunglasses]
+    DepartmentId:
+      name: department_id
+      in: query
+      required: false
+      schema:
+        type: integer
+    DepartmentName:
+      name: department_name
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Например Ленина, Качели, ТЦ Айсберг, Лермонтова.
+    Group:
+      name: group
+      in: query
+      required: false
+      schema:
+        type: string
+      description: салоны, склады_ип, склады_ооо, цех.
+
+  schemas:
+    RemainsFilteredRequest:
+      type: object
+      required: [category]
+      properties:
+        category:
+          type: string
+          enum: [accessories, contactlenses, glasses, lenses, sunglasses]
+        department_id:
+          type: integer
+        department_name:
+          type: string
+        group:
+          type: string
+        filters:
+          type: object
+          additionalProperties: true
+        min_price:
+          type: number
+        max_price:
+          type: number
+        price:
+          type: number
+        return_items:
+          type: boolean
+          default: false
+        items_limit:
+          type: integer
+          default: 0
+          minimum: 0
+          maximum: 1000

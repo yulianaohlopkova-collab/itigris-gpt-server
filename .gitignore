@@ -1,0 +1,9 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+
+# Local/private data (do not commit)
+data/input/*.csv
+reports/
+source_docs/
