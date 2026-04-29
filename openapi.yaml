@@ -314,6 +314,58 @@ paths:
               schema:
                 type: object
 
+  /contactlenses/remainGoodsReport/analyze-csv:
+    post:
+      operationId: contactlensesRemainGoodsReportAnalyzeCsv
+      summary: Точный остаток МКЛ из remainGoodsReport (CSV text in JSON)
+      description: >
+        GPT-friendly endpoint без multipart: передай CSV как строку report_csv.
+        Возвращает packs/units/value и статистику открытых упаковок.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [report_csv]
+              properties:
+                report_csv:
+                  type: string
+      responses:
+        "200":
+          description: Report summary
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /contactlenses/remainGoodsReport/analyze-base64:
+    post:
+      operationId: contactlensesRemainGoodsReportAnalyzeBase64
+      summary: Точный остаток МКЛ из remainGoodsReport (base64 file in JSON)
+      description: >
+        GPT-friendly endpoint без multipart: передай файл .xls/.xlsx/.csv в base64.
+        Важно: укажи filename с правильным расширением.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, file_base64]
+              properties:
+                filename:
+                  type: string
+                file_base64:
+                  type: string
+      responses:
+        "200":
+          description: Report summary
+          content:
+            application/json:
+              schema:
+                type: object
+
 components:
   securitySchemes:
     OdlServerToken:

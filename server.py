@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import base64
 import io
 import os
 from pathlib import Path
@@ -286,6 +287,15 @@ class SalesAnalyzeCsvRequest(BaseModel):
     employees_csv: Optional[str] = Field(default=None, description="CSV content for employees.csv (optional).")
     categories_csv: Optional[str] = Field(default=None, description="CSV content for categories.csv (optional).")
     training_csv: Optional[str] = Field(default=None, description="CSV content for training.csv (optional).")
+
+
+class RemainGoodsReportCsvRequest(BaseModel):
+    report_csv: str = Field(..., description="CSV content of remainGoodsReport (UTF-8).")
+
+
+class RemainGoodsReportBase64Request(BaseModel):
+    filename: str = Field(..., description="Original filename (e.g. remainGoodsReport.xls).")
+    file_base64: str = Field(..., description="Base64-encoded file bytes for .xls/.xlsx/.csv.")
 
 
 def csv_bytes_to_rows(raw: bytes) -> List[Dict[str, Any]]:
@@ -1248,6 +1258,70 @@ async def contactlenses_remain_goods_report_analyze(
     return {
         "category": "contactlenses",
         "source": "remainGoodsReport upload (truth source for contact lenses packs/units/value)",
+        "rows_count": len(rows),
+        "summary": totals,
+        "note": (
+            "Use this endpoint for exact contact lenses stock in packs/units/value including open packs. "
+            "ITigris remoteRemains is an API snapshot and may undercount open packs."
+        ),
+    }
+
+
+@app.post("/contactlenses/remainGoodsReport/analyze-csv")
+async def contactlenses_remain_goods_report_analyze_csv(
+    request: Request,
+    body: RemainGoodsReportCsvRequest,
+) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    raw = body.report_csv.encode("utf-8")
+    if len(raw) > 30_000_000:
+        raise HTTPException(status_code=413, detail="report_csv_too_large")
+    rows = parse_remain_goods_csv(raw)
+    totals = remain_goods_totals(rows)
+    return {
+        "category": "contactlenses",
+        "source": "remainGoodsReport CSV text (truth source for contact lenses packs/units/value)",
+        "rows_count": len(rows),
+        "summary": totals,
+        "note": (
+            "Use this endpoint for exact contact lenses stock in packs/units/value including open packs. "
+            "ITigris remoteRemains is an API snapshot and may undercount open packs."
+        ),
+    }
+
+
+@app.post("/contactlenses/remainGoodsReport/analyze-base64")
+async def contactlenses_remain_goods_report_analyze_base64(
+    request: Request,
+    body: RemainGoodsReportBase64Request,
+) -> Any:
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    try:
+        raw = base64.b64decode(body.file_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_base64")
+    if len(raw) > 30_000_000:
+        raise HTTPException(status_code=413, detail="report_file_too_large")
+
+    filename = (body.filename or "").lower()
+    if filename.endswith(".csv"):
+        rows = parse_remain_goods_csv(raw)
+    elif filename.endswith(".xlsx"):
+        rows = parse_remain_goods_xlsx(raw)
+    elif filename.endswith(".xls"):
+        rows = parse_remain_goods_xls(raw)
+    else:
+        raise HTTPException(status_code=400, detail="unsupported_report_file_type")
+
+    totals = remain_goods_totals(rows)
+    return {
+        "category": "contactlenses",
+        "source": "remainGoodsReport base64 (truth source for contact lenses packs/units/value)",
         "rows_count": len(rows),
         "summary": totals,
         "note": (
