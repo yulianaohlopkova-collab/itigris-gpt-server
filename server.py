@@ -514,15 +514,28 @@ def contact_lenses_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def normalize_header(text: str) -> str:
-    return str(text or "").strip().lower()
+    t = str(text or "").strip().lower()
+    t = t.replace("\u00a0", " ")
+    while "  " in t:
+        t = t.replace("  ", " ")
+    t = t.strip(":;,.")
+    return t
 
 
 REMAINGOODS_HEADERS = {
+    "department": {"департамент", "department", "салон", "магазин"},
     "qty_packs": {"количество, уп.", "количество уп.", "кол-во, уп.", "кол-во уп.", "количество упаковок", "упаковки"},
     "qty_units": {"количество, шт.", "количество шт.", "кол-во, шт.", "кол-во шт.", "количество штук", "штуки", "шт"},
     "remaining_in_pack": {"осталось в уп.", "осталось в уп", "остаток в уп.", "осталось"},
     "in_pack": {"кол-во в уп.", "кол-во в уп", "количество в уп.", "количество в уп", "в упаковке", "кол-во в упаковке"},
-    "value": {"сумма", "итого", "стоимость", "сумма, руб", "сумма руб", "сумма (руб)"},
+    # Important: ITigris export has both "Стоимость" (unit price) and "Сумма" (total).
+    # For truth totals we must use "Сумма".
+    "value": {"сумма", "сумма, руб", "сумма руб", "сумма (руб)"},
+    "unit_price": {"стоимость", "цена", "цена, руб", "цена руб"},
+}
+
+REMAINGOODS_HEADERS_NORM: Dict[str, set[str]] = {
+    key: {normalize_header(v) for v in variants} for key, variants in REMAINGOODS_HEADERS.items()
 }
 
 
@@ -533,24 +546,66 @@ def find_col_index(headers: List[str], variants: set[str]) -> Optional[int]:
     return None
 
 
+def detect_header_indices(headers: List[str]) -> Dict[str, Optional[int]]:
+    return {
+        "department": find_col_index(headers, REMAINGOODS_HEADERS_NORM["department"]),
+        "qty_packs": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_packs"]),
+        "qty_units": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_units"]),
+        "remaining_in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["remaining_in_pack"]),
+        "in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["in_pack"]),
+        "value": find_col_index(headers, REMAINGOODS_HEADERS_NORM["value"]),
+        "unit_price": find_col_index(headers, REMAINGOODS_HEADERS_NORM["unit_price"]),
+    }
+
+
+def header_indices_ok(idxs: Dict[str, Optional[int]]) -> bool:
+    return idxs["qty_packs"] is not None and idxs["qty_units"] is not None and idxs["value"] is not None
+
+
+def debug_headers(headers: List[str]) -> Dict[str, Any]:
+    idxs = detect_header_indices(headers)
+    found = {k: headers[v] if v is not None and v < len(headers) else None for k, v in idxs.items()}
+    return {"indices": idxs, "found_headers": found, "normalized_headers": [normalize_header(h) for h in headers]}
+
+
 def parse_remain_goods_csv(raw: bytes) -> List[Dict[str, Any]]:
     text = raw.decode("utf-8-sig", errors="replace")
     reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
-    if not rows:
+    all_rows = list(reader)
+    if not all_rows:
         return []
-    headers = rows[0]
-    idx_packs = find_col_index(headers, REMAINGOODS_HEADERS["qty_packs"])
-    idx_units = find_col_index(headers, REMAINGOODS_HEADERS["qty_units"])
-    idx_remaining = find_col_index(headers, REMAINGOODS_HEADERS["remaining_in_pack"])
-    idx_in_pack = find_col_index(headers, REMAINGOODS_HEADERS["in_pack"])
-    idx_value = find_col_index(headers, REMAINGOODS_HEADERS["value"])
+    header_row_index: Optional[int] = None
+    last_debug: Optional[Dict[str, Any]] = None
+    for i in range(0, min(50, len(all_rows))):
+        headers = [str(h or "") for h in all_rows[i]]
+        dbg = debug_headers(headers)
+        last_debug = dbg
+        if header_indices_ok(dbg["indices"]):
+            header_row_index = i
+            break
+    if header_row_index is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "remainGoodsReport_missing_required_columns",
+                "hint": "Header row not detected in first 50 rows.",
+                "preview_rows": all_rows[:20],
+                "headers_debug": last_debug,
+            },
+        )
 
-    if idx_packs is None or idx_units is None or idx_value is None:
-        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+    headers = [str(h or "") for h in all_rows[header_row_index]]
+    hdr_dbg = debug_headers(headers)
+    idx_department = hdr_dbg["indices"]["department"]
+    idx_packs = hdr_dbg["indices"]["qty_packs"]
+    idx_units = hdr_dbg["indices"]["qty_units"]
+    idx_remaining = hdr_dbg["indices"]["remaining_in_pack"]
+    idx_in_pack = hdr_dbg["indices"]["in_pack"]
+    idx_value = hdr_dbg["indices"]["value"]
+    idx_unit_price = hdr_dbg["indices"]["unit_price"]
 
     out: List[Dict[str, Any]] = []
-    for row in rows[1:]:
+    for row in all_rows[header_row_index + 1 :]:
         def get_i(i: Optional[int]) -> Any:
             if i is None or i >= len(row):
                 return None
@@ -558,11 +613,13 @@ def parse_remain_goods_csv(raw: bytes) -> List[Dict[str, Any]]:
 
         out.append(
             {
+                "department": str(get_i(idx_department) or "").strip() if idx_department is not None else "",
                 "qty_packs": parse_float(get_i(idx_packs)) or 0,
                 "qty_units": parse_float(get_i(idx_units)) or 0,
                 "remaining_in_pack": parse_float(get_i(idx_remaining)) if idx_remaining is not None else None,
                 "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
                 "value": parse_float(get_i(idx_value)) or 0,
+                "unit_price": parse_float(get_i(idx_unit_price)) if idx_unit_price is not None else None,
             }
         )
     return out
@@ -570,80 +627,183 @@ def parse_remain_goods_csv(raw: bytes) -> List[Dict[str, Any]]:
 
 def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
     wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-    ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
-    headers_tuple = next(rows_iter, None)
-    if not headers_tuple:
-        return []
-    headers = [str(h or "") for h in headers_tuple]
-    idx_packs = find_col_index(headers, REMAINGOODS_HEADERS["qty_packs"])
-    idx_units = find_col_index(headers, REMAINGOODS_HEADERS["qty_units"])
-    idx_remaining = find_col_index(headers, REMAINGOODS_HEADERS["remaining_in_pack"])
-    idx_in_pack = find_col_index(headers, REMAINGOODS_HEADERS["in_pack"])
-    idx_value = find_col_index(headers, REMAINGOODS_HEADERS["value"])
+    sheet_names = list(wb.sheetnames)
+    best_debug: Optional[Dict[str, Any]] = None
+    best_preview: List[List[str]] = []
 
-    if idx_packs is None or idx_units is None or idx_value is None:
-        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+    for sheet_name in sheet_names:
+        ws = wb[sheet_name]
+        preview = []
+        rows_cache: List[List[Any]] = []
+        for r_i, row in enumerate(ws.iter_rows(values_only=True)):
+            vals = list(row)
+            rows_cache.append(vals)
+            if r_i < 20:
+                preview.append([str(v or "") for v in vals[:25]])
+            if r_i >= 60:
+                break
+        if not rows_cache:
+            continue
 
-    out: List[Dict[str, Any]] = []
-    for row in rows_iter:
-        def get_i(i: Optional[int]) -> Any:
-            if i is None or i >= len(row):
-                return None
-            return row[i]
+        header_row_index: Optional[int] = None
+        last_debug: Optional[Dict[str, Any]] = None
+        for i in range(0, min(50, len(rows_cache))):
+            headers = [str(h or "") for h in rows_cache[i]]
+            dbg = debug_headers(headers)
+            last_debug = dbg
+            if header_indices_ok(dbg["indices"]):
+                header_row_index = i
+                break
 
-        out.append(
-            {
-                "qty_packs": parse_float(get_i(idx_packs)) or 0,
-                "qty_units": parse_float(get_i(idx_units)) or 0,
-                "remaining_in_pack": parse_float(get_i(idx_remaining)) if idx_remaining is not None else None,
-                "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
-                "value": parse_float(get_i(idx_value)) or 0,
-            }
-        )
-    return out
+        if header_row_index is None:
+            if best_debug is None:
+                best_debug = {"sheet": sheet_name, "headers_debug": last_debug}
+                best_preview = preview
+            continue
+
+        headers = [str(h or "") for h in rows_cache[header_row_index]]
+        hdr_dbg = debug_headers(headers)
+        idx_department = hdr_dbg["indices"]["department"]
+        idx_packs = hdr_dbg["indices"]["qty_packs"]
+        idx_units = hdr_dbg["indices"]["qty_units"]
+        idx_remaining = hdr_dbg["indices"]["remaining_in_pack"]
+        idx_in_pack = hdr_dbg["indices"]["in_pack"]
+        idx_value = hdr_dbg["indices"]["value"]
+        idx_unit_price = hdr_dbg["indices"]["unit_price"]
+
+        out: List[Dict[str, Any]] = []
+        for row in rows_cache[header_row_index + 1 :]:
+            def get_i(i: Optional[int]) -> Any:
+                if i is None or i >= len(row):
+                    return None
+                return row[i]
+
+            out.append(
+                {
+                    "department": str(get_i(idx_department) or "").strip() if idx_department is not None else "",
+                    "qty_packs": parse_float(get_i(idx_packs)) or 0,
+                    "qty_units": parse_float(get_i(idx_units)) or 0,
+                    "remaining_in_pack": parse_float(get_i(idx_remaining)) if idx_remaining is not None else None,
+                    "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
+                    "value": parse_float(get_i(idx_value)) or 0,
+                    "unit_price": parse_float(get_i(idx_unit_price)) if idx_unit_price is not None else None,
+                }
+            )
+        return out
+
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "remainGoodsReport_missing_required_columns",
+            "sheets": sheet_names,
+            "preview_rows": best_preview,
+            "debug": best_debug,
+        },
+    )
 
 
 def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
     book = xlrd.open_workbook(file_contents=raw)
-    sheet = book.sheet_by_index(0)
-    if sheet.nrows <= 0:
-        return []
-    headers = [str(sheet.cell_value(0, c) or "") for c in range(sheet.ncols)]
-    idx_packs = find_col_index(headers, REMAINGOODS_HEADERS["qty_packs"])
-    idx_units = find_col_index(headers, REMAINGOODS_HEADERS["qty_units"])
-    idx_remaining = find_col_index(headers, REMAINGOODS_HEADERS["remaining_in_pack"])
-    idx_in_pack = find_col_index(headers, REMAINGOODS_HEADERS["in_pack"])
-    idx_value = find_col_index(headers, REMAINGOODS_HEADERS["value"])
+    sheet_names = book.sheet_names()
+    best_debug: Optional[Dict[str, Any]] = None
+    best_preview: List[List[str]] = []
 
-    if idx_packs is None or idx_units is None or idx_value is None:
-        raise HTTPException(status_code=400, detail="remainGoodsReport_missing_required_columns")
+    for s_i, sheet_name in enumerate(sheet_names):
+        sheet = book.sheet_by_index(s_i)
+        if sheet.nrows <= 0:
+            continue
+        preview = [
+            [str(sheet.cell_value(r, c) or "") for c in range(min(sheet.ncols, 25))]
+            for r in range(min(sheet.nrows, 20))
+        ]
 
-    def cell(r: int, c: Optional[int]) -> Any:
-        if c is None or c < 0 or c >= sheet.ncols:
-            return None
-        if r < 0 or r >= sheet.nrows:
-            return None
-        return sheet.cell_value(r, c)
+        header_row_index: Optional[int] = None
+        last_debug: Optional[Dict[str, Any]] = None
+        for r in range(0, min(50, sheet.nrows)):
+            headers = [str(sheet.cell_value(r, c) or "") for c in range(sheet.ncols)]
+            dbg = debug_headers(headers)
+            last_debug = dbg
+            if header_indices_ok(dbg["indices"]):
+                header_row_index = r
+                break
 
-    out: List[Dict[str, Any]] = []
-    for r in range(1, sheet.nrows):
-        out.append(
-            {
-                "qty_packs": parse_float(cell(r, idx_packs)) or 0,
-                "qty_units": parse_float(cell(r, idx_units)) or 0,
-                "remaining_in_pack": parse_float(cell(r, idx_remaining)) if idx_remaining is not None else None,
-                "in_pack": parse_float(cell(r, idx_in_pack)) if idx_in_pack is not None else None,
-                "value": parse_float(cell(r, idx_value)) or 0,
-            }
-        )
-    return out
+        if header_row_index is None:
+            if best_debug is None:
+                best_debug = {"sheet": sheet_name, "headers_debug": last_debug}
+                best_preview = preview
+            continue
+
+        headers = [str(sheet.cell_value(header_row_index, c) or "") for c in range(sheet.ncols)]
+        hdr_dbg = debug_headers(headers)
+        idx_department = hdr_dbg["indices"]["department"]
+        idx_packs = hdr_dbg["indices"]["qty_packs"]
+        idx_units = hdr_dbg["indices"]["qty_units"]
+        idx_remaining = hdr_dbg["indices"]["remaining_in_pack"]
+        idx_in_pack = hdr_dbg["indices"]["in_pack"]
+        idx_value = hdr_dbg["indices"]["value"]
+        idx_unit_price = hdr_dbg["indices"]["unit_price"]
+
+        def cell(r: int, c: Optional[int]) -> Any:
+            if c is None or c < 0 or c >= sheet.ncols:
+                return None
+            if r < 0 or r >= sheet.nrows:
+                return None
+            return sheet.cell_value(r, c)
+
+        out: List[Dict[str, Any]] = []
+        for r in range(header_row_index + 1, sheet.nrows):
+            out.append(
+                {
+                    "department": str(cell(r, idx_department) or "").strip() if idx_department is not None else "",
+                    "qty_packs": parse_float(cell(r, idx_packs)) or 0,
+                    "qty_units": parse_float(cell(r, idx_units)) or 0,
+                    "remaining_in_pack": parse_float(cell(r, idx_remaining)) if idx_remaining is not None else None,
+                    "in_pack": parse_float(cell(r, idx_in_pack)) if idx_in_pack is not None else None,
+                    "value": parse_float(cell(r, idx_value)) or 0,
+                    "unit_price": parse_float(cell(r, idx_unit_price)) if idx_unit_price is not None else None,
+                }
+            )
+        return out
+
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "remainGoodsReport_missing_required_columns",
+            "sheets": sheet_names,
+            "preview_rows": best_preview,
+            "debug": best_debug,
+        },
+    )
 
 
 def remain_goods_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    total_packs = int(sum(parse_float(r.get("qty_packs")) or 0 for r in rows))
-    total_units = int(sum(parse_float(r.get("qty_units")) or 0 for r in rows))
-    total_value = float(sum(parse_float(r.get("value")) or 0 for r in rows))
+    # Prefer explicit summary line if present (common in ITigris exports).
+    summary_row: Optional[Dict[str, Any]] = None
+    for r in rows:
+        dep = normalize_header(r.get("department") or "")
+        if dep in {"итого", "всего", "итог", "total"}:
+            summary_row = r
+            break
+
+    value_from_details = False
+    if summary_row:
+        total_packs = int(parse_float(summary_row.get("qty_packs")) or 0)
+        total_units = int(parse_float(summary_row.get("qty_units")) or 0)
+        total_value = float(parse_float(summary_row.get("value")) or 0)
+        # Some .xls exports keep totals as formulas; xlrd may read them as 0.
+        if total_value <= 0:
+            detail_value = sum(
+                (parse_float(r.get("value")) or 0)
+                for r in rows
+                if normalize_header(r.get("department") or "") not in {"итого", "всего", "итог", "total"}
+            )
+            if detail_value > 0:
+                total_value = float(detail_value)
+                value_from_details = True
+    else:
+        total_packs = int(sum(parse_float(r.get("qty_packs")) or 0 for r in rows))
+        total_units = int(sum(parse_float(r.get("qty_units")) or 0 for r in rows))
+        total_value = float(sum(parse_float(r.get("value")) or 0 for r in rows))
     open_lines = 0
     open_packs = 0
     open_units = 0
@@ -667,6 +827,8 @@ def remain_goods_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "open_qty_packs": open_packs,
         "open_qty_units": open_units,
         "open_value": round(open_value, 2),
+        "used_summary_row": bool(summary_row),
+        "value_from_details_sum": value_from_details,
     }
 
 
