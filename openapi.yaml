@@ -72,6 +72,9 @@ paths:
             application/json:
               schema:
                 type: object
+                description: >
+                  Для category=contactlenses в summary дополнительно возвращаются:
+                  total_qty_packs, total_qty_units и open_packs_detected.
 
   /count-by-filters:
     post:

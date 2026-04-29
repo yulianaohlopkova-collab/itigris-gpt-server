@@ -432,6 +432,85 @@ def sum_qty_value(rows: List[Dict[str, Any]]) -> Tuple[int, float]:
     return qty, value
 
 
+def parse_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text or text in {"-", "None", "nan"}:
+        return None
+    text = text.replace("\u00a0", "").replace(" ", "").replace(",", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def contact_lenses_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    # For contact lenses we prefer explicit fields when present:
+    # - qty_packs: "Количество, уп."
+    # - qty_units: "Количество, шт."
+    # - remaining_in_pack: "Осталось в уп."
+    # - in_pack: "Кол-во в уп."
+    # - value: "Сумма"
+    # Otherwise we fall back to remoteRemains fields: amount/price and try to account for open packs
+    # via remaining_in_pack + in_pack when present.
+    total_packs = 0
+    total_units = 0
+    total_value = 0.0
+    open_packs_count = 0
+
+    for row in rows:
+        qty_packs = parse_float(row.get("qty_packs") or row.get("Количество, уп.") or row.get("packs"))
+        qty_units = parse_float(row.get("qty_units") or row.get("Количество, шт.") or row.get("units") or row.get("qty"))
+        remaining_in_pack = parse_float(
+            row.get("remaining_in_pack")
+            or row.get("Осталось в уп.")
+            or row.get("remainingInPack")
+            or row.get("restInPack")
+        )
+        in_pack = parse_float(
+            row.get("in_pack")
+            or row.get("Кол-во в уп.")
+            or row.get("inPack")
+            or row.get("inpack")
+        )
+        value = parse_float(row.get("value") or row.get("Сумма") or row.get("sum") or row.get("total"))
+
+        # 1) If report-style fields exist, use them as source of truth for this row.
+        used_report_fields = False
+        if qty_packs is not None or qty_units is not None or value is not None:
+            used_report_fields = True
+            total_packs += int(qty_packs or 0)
+            total_units += int(qty_units or 0)
+            total_value += float(value or 0)
+
+        # 2) Otherwise fall back to remoteRemains.
+        if not used_report_fields:
+            packs = amount_as_int(row)
+            price = price_as_float(row)
+            total_packs += packs
+            total_value += price * packs
+
+            # If we have open-pack info, add 1 pack + remaining units for the open pack.
+            if remaining_in_pack is not None and in_pack is not None:
+                if remaining_in_pack > 0 and remaining_in_pack < in_pack:
+                    open_packs_count += 1
+                    total_packs += 1
+                    total_units += int(remaining_in_pack)
+                else:
+                    # Best-effort: if only in_pack exists and no open pack, estimate units from full packs.
+                    total_units += int(packs * in_pack)
+
+    return {
+        "total_qty_packs": total_packs,
+        "total_qty_units": total_units,
+        "total_value": round(total_value, 2),
+        "open_packs_detected": open_packs_count,
+    }
+
+
 def rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str = "Remains") -> bytes:
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {"in_memory": True})
@@ -499,8 +578,15 @@ async def fetch_optima_remains(
 
 
 def summarize_rows(category: str, rows: List[Dict[str, Any]], limit: int = 0) -> Dict[str, Any]:
-    total_qty, total_value = sum_qty_value(rows)
-    avg_price = total_value / total_qty if total_qty else 0.0
+    if category == "contactlenses":
+        totals = contact_lenses_totals(rows)
+        total_qty = int(totals["total_qty_packs"])
+        total_value = float(totals["total_value"])
+        avg_price = total_value / total_qty if total_qty else 0.0
+    else:
+        total_qty, total_value = sum_qty_value(rows)
+        avg_price = total_value / total_qty if total_qty else 0.0
+
     response: Dict[str, Any] = {
         "category": category,
         "source": "ITigris remoteRemains/list",
@@ -511,6 +597,18 @@ def summarize_rows(category: str, rows: List[Dict[str, Any]], limit: int = 0) ->
             "avg_price": round(avg_price, 2),
         },
     }
+    if category == "contactlenses":
+        response["summary"].update(
+            {
+                "total_qty_packs": int(totals["total_qty_packs"]),
+                "total_qty_units": int(totals["total_qty_units"]),
+                "open_packs_detected": int(totals["open_packs_detected"]),
+                "note": (
+                    "contactlenses totals are reported as packs+units when possible. "
+                    "remoteRemains may undercount open packs compared to report exports."
+                ),
+            }
+        )
     if limit > 0:
         response["items"] = rows[:limit]
         response["items_truncated"] = len(rows) > limit
