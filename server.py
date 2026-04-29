@@ -1229,6 +1229,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
     resolved_filename: str
     rows: List[Dict[str, Any]]
     method_used: str
+    method_attempted: str = "url_template" if REMAINGOODS_AUTO_FETCH_URL_TEMPLATE else "web_reportPage"
     try:
         if REMAINGOODS_AUTO_FETCH_URL_TEMPLATE:
             filename, raw, err = await _auto_fetch_remain_goods_report_bytes()
@@ -1246,11 +1247,21 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         # Keep the detail for debugging (can be dict).
         _contactlenses_auto_fetch_state["last_error"] = e.detail
         _contactlenses_auto_fetch_state["last_error_at_unix"] = now
-        return {"ok": False, "error": "auto_refresh_failed", "debug": e.detail}
-    except Exception:
-        _contactlenses_auto_fetch_state["last_error"] = "parse_error_unknown"
+        return {
+            "ok": False,
+            "error": "auto_refresh_failed",
+            "method_attempted": method_attempted,
+            "debug": e.detail,
+        }
+    except Exception as exc:
+        _contactlenses_auto_fetch_state["last_error"] = {"type": type(exc).__name__, "message": str(exc)}
         _contactlenses_auto_fetch_state["last_error_at_unix"] = now
-        return {"ok": False, "error": "parse_error_unknown"}
+        return {
+            "ok": False,
+            "error": "parse_error_unknown",
+            "method_attempted": method_attempted,
+            "debug": {"type": type(exc).__name__, "message": str(exc)},
+        }
 
     expires = now + REMAINGOODS_SNAPSHOT_TTL_SECONDS
     global _contactlenses_report_global_snapshot
@@ -1936,7 +1947,7 @@ async def contactlenses_stock(
 
     if source in {"auto", "snapshot"}:
         # 0) Best-effort refresh from ITigris export URL (if configured).
-        if source == "auto" and REMAINGOODS_AUTO_FETCH_URL_TEMPLATE:
+        if source == "auto" and (REMAINGOODS_AUTO_FETCH_URL_TEMPLATE or REMAINGOODS_WEB_COOKIE):
             await maybe_refresh_global_snapshot_from_itigris(force=False)
 
         # 1) Prefer global snapshot (single upload for all departments).
