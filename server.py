@@ -1174,7 +1174,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         }
 
     url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
+    ua = ITIGRIS_WEB_USER_AGENT or "Mozilla/5.0"
     headers = {"X-Requested-With": "XMLHttpRequest"}
+    web_headers = {"X-Requested-With": "XMLHttpRequest", "User-Agent": ua}
 
     async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
@@ -1186,16 +1188,13 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
         # Bootstrap cookies (JSESSIONID, route, etc.) and try to extract pageUUID/uuidValue if present.
         # In a real browser a GET happens before login.
-        ua = ITIGRIS_WEB_USER_AGENT or "Mozilla/5.0"
-        bootstrap_headers = dict(headers)
-        bootstrap_headers["User-Agent"] = ua
         try:
-            await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=bootstrap_headers)
+            await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
         except Exception:
             pass
         login_page_text = ""
         try:
-            r = await client.get(f"https://optima.itigris.ru/{APP_NAME}/login", headers=bootstrap_headers)
+            r = await client.get(f"https://optima.itigris.ru/{APP_NAME}/login", headers=web_headers)
             login_page_text = r.text or ""
         except Exception:
             pass
@@ -1229,10 +1228,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
         # We want to capture redirect params from Location.
         try:
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=bootstrap_headers, follow_redirects=False)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=web_headers, follow_redirects=False)
         except TypeError:
             # Older httpx: follow_redirects is client-level only.
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=bootstrap_headers)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=web_headers)
 
         login_status = resp.status_code
         login_location = resp.headers.get("location") or resp.headers.get("Location") or ""
@@ -1295,7 +1294,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # Hit userStart once; some sessions set additional cookies.
             user_start_ok = False
             try:
-                r2 = await client.get(absolute, headers=bootstrap_headers)
+                r2 = await client.get(absolute, headers=web_headers)
                 user_start_ok = (r2.status_code == 200)
             except Exception:
                 user_start_ok = False
@@ -1341,7 +1340,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "pageUUID": ctx.get("pageUUID") or ITIGRIS_WEB_PAGE_UUID or "",
                 "companyUUID": company_uuid,
             }
-            start_resp = await client.post(start_url, data=start_payload, headers=bootstrap_headers)
+            start_resp = await client.post(start_url, data=start_payload, headers=web_headers)
             start_ctx = _extract_optima_ctx_from_text(start_resp.text or "")
             report_page_uuid = start_ctx.get("pageUUID") or start_payload["pageUUID"] or ""
             report_uuid_value = start_ctx.get("uuidValue") or start_payload["uuidValue"] or ""
@@ -1349,7 +1348,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # 2) reportPage prepareData=true (usually updates uuidValue)
             prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
             prep_form["prepareData"] = "true"
-            prep_resp = await client.post(url, data=prep_form, headers=bootstrap_headers)
+            prep_resp = await client.post(url, data=prep_form, headers=web_headers)
             prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
             report_page_uuid = prep_ctx.get("pageUUID") or report_page_uuid
             report_uuid_value = prep_ctx.get("uuidValue") or report_uuid_value
