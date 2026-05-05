@@ -8,6 +8,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urljoin, urlparse, parse_qs
 
 import httpx
 import openpyxl
@@ -55,6 +56,15 @@ REMAINGOODS_WEB_UUID_VALUE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_UUID_VALUE
 REMAINGOODS_WEB_REPORT_TYPE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_REPORT_TYPE", "Контактные линзы").strip()
 REMAINGOODS_WEB_PRICE_TYPE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_PRICE_TYPE", "Розничная").strip()
 REMAINGOODS_WEB_DEPARTMENT_IDS = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_DEPARTMENT_IDS", "").strip()
+
+# Web login (preferred over static cookies; cookies expire quickly).
+ITIGRIS_WEB_LOGIN = os.getenv("ITIGRIS_WEB_LOGIN", "").strip()
+ITIGRIS_WEB_PASSWORD = os.getenv("ITIGRIS_WEB_PASSWORD", "").strip()
+ITIGRIS_WEB_KEY = os.getenv("ITIGRIS_WEB_KEY", "").strip()
+ITIGRIS_WEB_VERSION_DESC = os.getenv("ITIGRIS_WEB_VERSION_DESC", "").strip()
+ITIGRIS_WEB_BROWSER_DESC = os.getenv("ITIGRIS_WEB_BROWSER_DESC", "").strip()
+
+ITIGRIS_WEB_LOGIN_URL = os.getenv("ITIGRIS_WEB_LOGIN_URL", f"https://optima.itigris.ru/{APP_NAME}/login/login").strip()
 
 
 DEPARTMENTS: Dict[str, int] = {
@@ -1100,13 +1110,11 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
 
 async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] = None) -> Tuple[str, List[Dict[str, Any]]]:
     """
-    Uses Optima web session (cookie/JSESSIONID) to request HTML reportPage and parse it.
+    Uses Optima web session to request HTML reportPage and parse it.
+    Preferred: login/password/key (server performs login to get fresh session cookies).
+    Fallback: static Cookie header (ITIGRIS_REMAINGOODSREPORT_WEB_COOKIE).
     """
-    if not REMAINGOODS_WEB_COOKIE:
-        raise HTTPException(status_code=500, detail="auto_web_cookie_not_configured")
     company_uuid = REMAINGOODS_WEB_COMPANY_UUID or APP_NAME
-    if not REMAINGOODS_WEB_USER_ID or not REMAINGOODS_WEB_PAGE_UUID or not REMAINGOODS_WEB_UUID_VALUE:
-        raise HTTPException(status_code=500, detail="auto_web_payload_not_configured")
 
     if not date_ddmmyyyy:
         # Default: server local date (Render is usually UTC; for MVP this is OK, can override via refresh endpoint).
@@ -1117,29 +1125,101 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
     else:
         dep_ids = [str(v) for v in DEPARTMENTS.values()]
 
-    # NOTE: For httpx.AsyncClient we must avoid passing "data" as a list of tuples with repeated
-    # keys, because httpx may build a sync byte stream (IteratorByteStream) which fails at send time.
-    # Use dict + list values instead.
-    form: Dict[str, Any] = {
+    def build_report_form(user_id: str, page_uuid: str, uuid_value: str) -> Dict[str, Any]:
+        # NOTE: For httpx.AsyncClient we must avoid passing "data" as a list of tuples with repeated
+        # keys, because httpx may build a sync byte stream (IteratorByteStream) which fails at send time.
+        # Use dict + list values instead.
+        return {
         "date": date_ddmmyyyy,
         "reportType": REMAINGOODS_WEB_REPORT_TYPE,
         "priceType": REMAINGOODS_WEB_PRICE_TYPE,
         "groupByDepartment": "true",
         "prepareData": "true",
         "companyUUID": company_uuid,
-        "userId": REMAINGOODS_WEB_USER_ID,
-        "pageUUID": REMAINGOODS_WEB_PAGE_UUID,
-        "uuidValue": REMAINGOODS_WEB_UUID_VALUE,
+        "userId": user_id,
+        "pageUUID": page_uuid,
+        "uuidValue": uuid_value,
         "department": dep_ids,
-    }
+        }
 
     url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
-    headers = {
-        "X-Requested-With": "XMLHttpRequest",
-        "Cookie": REMAINGOODS_WEB_COOKIE,
-    }
+    headers = {"X-Requested-With": "XMLHttpRequest"}
+
+    async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
+        form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
+        return await client.post(url, data=form, headers=headers)
+
+    async def login_and_get_context(client: httpx.AsyncClient) -> Dict[str, str]:
+        if not ITIGRIS_WEB_LOGIN or not ITIGRIS_WEB_PASSWORD or not ITIGRIS_WEB_KEY:
+            raise HTTPException(status_code=500, detail="auto_web_login_not_configured")
+
+        login_form: Dict[str, Any] = {
+            "loginAction": "true",
+            "login": ITIGRIS_WEB_LOGIN,
+            "password": ITIGRIS_WEB_PASSWORD,
+            "key": ITIGRIS_WEB_KEY,
+            "versionDesc": ITIGRIS_WEB_VERSION_DESC or "server",
+            "browserDesc": ITIGRIS_WEB_BROWSER_DESC or "server",
+            "userId": "",
+            "uuidValue": "",
+            "pageUUID": "",
+            "companyUUID": company_uuid,
+        }
+
+        # We want to capture redirect params from Location.
+        try:
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=headers, follow_redirects=False)
+        except TypeError:
+            # Older httpx: follow_redirects is client-level only.
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=headers)
+
+        if resp.status_code not in {200, 302, 303}:
+            raise HTTPException(status_code=502, detail={"error": "auto_web_login_failed", "status_code": resp.status_code, "body_snippet": (resp.text or "")[:1000]})
+
+        location = resp.headers.get("location") or resp.headers.get("Location") or ""
+        if not location and resp.history:
+            location = resp.history[-1].headers.get("location") or ""
+        if location:
+            absolute = urljoin(f"https://optima.itigris.ru/{APP_NAME}/", location.lstrip("/"))
+            parsed = urlparse(absolute)
+            qs = parse_qs(parsed.query)
+            ctx = {
+                "userId": (qs.get("userId") or [""])[0],
+                "pageUUID": (qs.get("pageUUID") or [""])[0],
+                "uuidValue": (qs.get("uuidValue") or [""])[0],
+                "companyUUID": (qs.get("companyUUID") or [company_uuid])[0] or company_uuid,
+            }
+            # Hit userStart once; some sessions set additional cookies.
+            try:
+                await client.get(absolute, headers=headers)
+            except Exception:
+                pass
+            return ctx
+
+        # If no redirect, fall back to env-provided context (older behavior).
+        return {
+            "userId": REMAINGOODS_WEB_USER_ID,
+            "pageUUID": REMAINGOODS_WEB_PAGE_UUID,
+            "uuidValue": REMAINGOODS_WEB_UUID_VALUE,
+            "companyUUID": company_uuid,
+        }
+
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
-        resp = await client.post(url, data=form, headers=headers)
+        # Preferred: server-side login to get fresh session.
+        if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
+            ctx = await login_and_get_context(client)
+            if not ctx.get("userId") or not ctx.get("pageUUID") or not ctx.get("uuidValue"):
+                raise HTTPException(status_code=502, detail={"error": "auto_web_login_missing_context", "context": ctx})
+            resp = await do_report_request(client, ctx["userId"], ctx["pageUUID"], ctx["uuidValue"])
+        else:
+            # Fallback: static Cookie header + static context from env.
+            if not REMAINGOODS_WEB_COOKIE:
+                raise HTTPException(status_code=500, detail="auto_web_cookie_not_configured")
+            if not REMAINGOODS_WEB_USER_ID or not REMAINGOODS_WEB_PAGE_UUID or not REMAINGOODS_WEB_UUID_VALUE:
+                raise HTTPException(status_code=500, detail="auto_web_payload_not_configured")
+            client.headers.update({"Cookie": REMAINGOODS_WEB_COOKIE})
+            resp = await do_report_request(client, REMAINGOODS_WEB_USER_ID, REMAINGOODS_WEB_PAGE_UUID, REMAINGOODS_WEB_UUID_VALUE)
+
     content_type = (resp.headers.get("content-type") or "").lower()
     text_snippet = resp.text[:2000] if resp.text else ""
     looks_like_login = any(
@@ -1896,11 +1976,12 @@ async def contactlenses_remain_goods_report_auto_status(request: Request) -> Any
         return auth_err
     global_snap = get_global_snapshot()
     return {
-        "auto_fetch_configured": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE or REMAINGOODS_WEB_COOKIE),
+        "auto_fetch_configured": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE or REMAINGOODS_WEB_COOKIE or (ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY)),
         "auto_refresh_min_seconds": REMAINGOODS_AUTO_REFRESH_MIN_SECONDS,
         "auto_fetch_methods": {
             "url_template": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE),
-            "web_reportPage": bool(REMAINGOODS_WEB_COOKIE),
+            "web_reportPage_cookie": bool(REMAINGOODS_WEB_COOKIE),
+            "web_reportPage_login": bool(ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY),
         },
         "remote_api_key_configured": bool(REMOTE_API_KEY),
         "external_api_key_configured": bool(EXTERNAL_API_KEY),
@@ -1948,7 +2029,11 @@ async def contactlenses_stock(
 
     if source in {"auto", "snapshot"}:
         # 0) Best-effort refresh from ITigris export URL (if configured).
-        if source == "auto" and (REMAINGOODS_AUTO_FETCH_URL_TEMPLATE or REMAINGOODS_WEB_COOKIE):
+        if source == "auto" and (
+            REMAINGOODS_AUTO_FETCH_URL_TEMPLATE
+            or REMAINGOODS_WEB_COOKIE
+            or (ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY)
+        ):
             await maybe_refresh_global_snapshot_from_itigris(force=False)
 
         # 1) Prefer global snapshot (single upload for all departments).

@@ -37,6 +37,10 @@ Environment:
 - `ITIGRIS_REMAINGOODSREPORT_WEB_UUID_VALUE` optional
 - `ITIGRIS_REMAINGOODSREPORT_WEB_COMPANY_UUID` optional (default = ITIGRIS_APP_NAME)
 - `ITIGRIS_REMAINGOODSREPORT_WEB_DEPARTMENT_IDS` optional (comma-separated; default = all known departments in server)
+- `ITIGRIS_WEB_LOGIN` optional (логин Optima Web; предпочтительный способ авто-обновления)
+- `ITIGRIS_WEB_PASSWORD` optional
+- `ITIGRIS_WEB_KEY` optional
+- `ITIGRIS_WEB_LOGIN_URL` optional (default `https://optima.itigris.ru/{app}/login/login`)
 - `REMAINGOODS_AUTO_REFRESH_MIN_SECONDS` optional (default 600)
 
 ## Реальный прогон MVP
