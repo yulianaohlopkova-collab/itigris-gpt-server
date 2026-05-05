@@ -1262,9 +1262,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Preferred: server-side login to get fresh session.
         if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
             ctx = await login_and_get_context(client)
-            if not ctx.get("userId") or not ctx.get("pageUUID") or not ctx.get("uuidValue"):
+            # In Optima web login flow, userId may be empty in login payload/redirect. pageUUID + uuidValue
+            # are the important values; userId can be provided via env (known service user id) or left empty.
+            if not ctx.get("pageUUID") or not ctx.get("uuidValue"):
                 raise HTTPException(status_code=502, detail={"error": "auto_web_login_missing_context", "context": ctx})
-            resp = await do_report_request(client, ctx["userId"], ctx["pageUUID"], ctx["uuidValue"])
+            report_user_id = (ctx.get("userId") or ITIGRIS_WEB_USER_ID or REMAINGOODS_WEB_USER_ID or "").strip()
+            resp = await do_report_request(client, report_user_id, ctx["pageUUID"], ctx["uuidValue"])
         else:
             # Fallback: static Cookie header + static context from env.
             if not REMAINGOODS_WEB_COOKIE:
