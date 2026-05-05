@@ -1112,6 +1112,33 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
     return rows_out
 
 
+def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
+    """
+    Best-effort extractor for userId/pageUUID/uuidValue/companyUUID from Optima HTML/JS responses.
+    Does not assume a specific template.
+    """
+    src = text or ""
+
+    def _find_hidden(name: str) -> str:
+        m = re.search(rf'name=\"{re.escape(name)}\"\\s+value=\"([^\"]+)\"', src)
+        return m.group(1).strip() if m else ""
+
+    def _find_query(name: str) -> str:
+        # Match ...name=VALUE... in text blobs (hrefs/scripts).
+        m = re.search(rf"(?:\\?|&){re.escape(name)}=([^&\\s\\\"'>]+)", src)
+        return m.group(1).strip() if m else ""
+
+    def _find_js(name: str) -> str:
+        # Match name:'value' or name=\"value\"
+        m = re.search(rf"{re.escape(name)}\\s*[:=]\\s*['\\\"]([^'\\\"]+)['\\\"]", src)
+        return m.group(1).strip() if m else ""
+
+    out: Dict[str, str] = {}
+    for key in ["userId", "pageUUID", "uuidValue", "companyUUID"]:
+        out[key] = _find_hidden(key) or _find_query(key) or _find_js(key) or ""
+    return out
+
+
 async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] = None) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Uses Optima web session to request HTML reportPage and parse it.
@@ -1177,12 +1204,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         extracted_uuid_value = ""
         extracted_user_id = ""
         if login_page_text:
-            def _extract(name: str) -> str:
-                m = re.search(rf'name=\"{re.escape(name)}\"\\s+value=\"([^\"]+)\"', login_page_text)
-                return m.group(1).strip() if m else ""
-            extracted_page_uuid = _extract("pageUUID")
-            extracted_uuid_value = _extract("uuidValue")
-            extracted_user_id = _extract("userId")
+            extracted = _extract_optima_ctx_from_text(login_page_text)
+            extracted_page_uuid = extracted.get("pageUUID") or ""
+            extracted_uuid_value = extracted.get("uuidValue") or ""
+            extracted_user_id = extracted.get("userId") or ""
 
         # If we can't extract from HTML, allow explicit env overrides.
         extracted_page_uuid = extracted_page_uuid or ITIGRIS_WEB_PAGE_UUID
@@ -1302,12 +1327,45 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Preferred: server-side login to get fresh session.
         if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
             ctx = await login_and_get_context(client)
-            # In Optima web login flow, userId may be empty in login payload/redirect. pageUUID + uuidValue
-            # are the important values; userId can be provided via env (known service user id) or left empty.
-            if not ctx.get("pageUUID") or not ctx.get("uuidValue"):
-                raise HTTPException(status_code=502, detail={"error": "auto_web_login_missing_context", "context": ctx})
-            report_user_id = (ctx.get("userId") or ITIGRIS_WEB_USER_ID or REMAINGOODS_WEB_USER_ID or "").strip()
-            resp = await do_report_request(client, report_user_id, ctx["pageUUID"], ctx["uuidValue"])
+            # remainGoodsReport uses its own pageUUID/uuidValue chain:
+            # login -> userStart -> remainGoodsReport/startPage -> reportPage (prepareData=true) -> reportPage.
+            report_user_id = (ITIGRIS_WEB_USER_ID or ctx.get("userId") or REMAINGOODS_WEB_USER_ID or "").strip()
+            if not report_user_id:
+                raise HTTPException(status_code=502, detail={"error": "auto_web_missing_user_id_for_reports"})
+
+            # 1) startPage (initializes report pageUUID/uuidValue)
+            start_url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/startPage"
+            start_payload = {
+                "userId": report_user_id,
+                "uuidValue": ctx.get("uuidValue") or ITIGRIS_WEB_UUID_VALUE or "",
+                "pageUUID": ctx.get("pageUUID") or ITIGRIS_WEB_PAGE_UUID or "",
+                "companyUUID": company_uuid,
+            }
+            start_resp = await client.post(start_url, data=start_payload, headers=bootstrap_headers)
+            start_ctx = _extract_optima_ctx_from_text(start_resp.text or "")
+            report_page_uuid = start_ctx.get("pageUUID") or start_payload["pageUUID"] or ""
+            report_uuid_value = start_ctx.get("uuidValue") or start_payload["uuidValue"] or ""
+
+            # 2) reportPage prepareData=true (usually updates uuidValue)
+            prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
+            prep_form["prepareData"] = "true"
+            prep_resp = await client.post(url, data=prep_form, headers=bootstrap_headers)
+            prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
+            report_page_uuid = prep_ctx.get("pageUUID") or report_page_uuid
+            report_uuid_value = prep_ctx.get("uuidValue") or report_uuid_value
+
+            # 3) reportPage final (parse this HTML)
+            final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value)
+            # expose these values for debug below
+            ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
+                "report_user_id": report_user_id,
+                "start_status": start_resp.status_code,
+                "prep_status": prep_resp.status_code,
+                "final_status": final_resp.status_code,
+                "pageUUID": report_page_uuid,
+                "uuidValue": report_uuid_value,
+            }
+            resp = final_resp
         else:
             # Fallback: static Cookie header + static context from env.
             if not REMAINGOODS_WEB_COOKIE:
@@ -1344,10 +1402,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "html_snippet": text_snippet,
                 "cookies_present": sorted({c.name for c in client.cookies.jar}) if "client" in locals() else [],
                 "report_context": {
-                    "userId_used": report_user_id if "report_user_id" in locals() else None,
-                    "pageUUID_used": ctx.get("pageUUID") if "ctx" in locals() else None,
-                    "uuidValue_used": ctx.get("uuidValue") if "ctx" in locals() else None,
+                    "userId_used": (ctx.get("_report_ctx") or {}).get("report_user_id") if "ctx" in locals() else None,
+                    "pageUUID_used": (ctx.get("_report_ctx") or {}).get("pageUUID") if "ctx" in locals() else None,
+                    "uuidValue_used": (ctx.get("_report_ctx") or {}).get("uuidValue") if "ctx" in locals() else None,
                     "login_debug": ctx.get("_debug") if "ctx" in locals() else None,
+                    "report_debug": ctx.get("_report_ctx") if "ctx" in locals() else None,
                 }
             },
         )
