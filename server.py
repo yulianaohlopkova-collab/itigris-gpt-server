@@ -1180,7 +1180,15 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
     url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
     ua = ITIGRIS_WEB_USER_AGENT or "Mozilla/5.0"
     headers = {"X-Requested-With": "XMLHttpRequest"}
-    web_headers = {"X-Requested-With": "XMLHttpRequest", "User-Agent": ua}
+    # Match browser-ish headers for XHR.
+    base_url = f"https://optima.itigris.ru/{APP_NAME}"
+    web_headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": ua,
+        "Accept": "text/html, */*; q=0.01",
+        "Referer": f"{base_url}/remainGoodsReport",
+        "Origin": "https://optima.itigris.ru",
+    }
 
     async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
@@ -1426,6 +1434,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # 2) reportPage prepareData=true (usually updates uuidValue)
             prep_resp: httpx.Response
             prep_ctx: Dict[str, str] = {}
+            prep_debug: Dict[str, Any] = {"attempts": []}
             for attempt in range(1, 9):
                 prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
                 prep_form["prepareData"] = "true"
@@ -1436,7 +1445,23 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     report_uuid_value = prep_ctx.get("uuidValue") or report_uuid_value
                     break
                 if prep_resp.status_code == 211:
-                    await asyncio.sleep(min(2.0, 0.2 * (2 ** (attempt - 1))))
+                    sleep_s = min(2.0, 0.2 * (2 ** (attempt - 1)))
+                    prep_debug["attempts"].append(
+                        {
+                            "attempt": attempt,
+                            "status_code": 211,
+                            "sleep_s": sleep_s,
+                            "payload_meta": {
+                                "userId": prep_form.get("userId"),
+                                "pageUUID": prep_form.get("pageUUID"),
+                                "uuidValue": prep_form.get("uuidValue"),
+                                "prepareData": prep_form.get("prepareData"),
+                                "groupByDepartment": prep_form.get("groupByDepartment"),
+                                "departments_count": len(dep_ids),
+                            },
+                        }
+                    )
+                    await asyncio.sleep(sleep_s)
                     continue
                 raise HTTPException(
                     status_code=502,
@@ -1448,6 +1473,18 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     },
                 )
             else:
+                ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
+                    "report_user_id": report_user_id,
+                    "start_status": start_resp.status_code,
+                    "pageUUID": report_page_uuid,
+                    "uuidValue": report_uuid_value,
+                    "seed_pageUUID": report_seed_page_uuid,
+                    "seed_uuidValue": report_seed_uuid_value,
+                    "start_ctx": start_ctx,
+                    "start_snippet": (start_resp.text or "")[:400],
+                    "prepare_debug": prep_debug,
+                    "module_ctx": module_ctx,
+                }
                 raise HTTPException(
                     status_code=502,
                     detail={
@@ -1455,6 +1492,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         "status_code": prep_resp.status_code,
                         "content_type": (prep_resp.headers.get("content-type") or ""),
                         "body_snippet": (prep_resp.text or "")[:1200],
+                        "report_debug": ctx.get("_report_ctx"),
                     },
                 )
 
