@@ -64,6 +64,9 @@ ITIGRIS_WEB_KEY = os.getenv("ITIGRIS_WEB_KEY", "").strip()
 ITIGRIS_WEB_VERSION_DESC = os.getenv("ITIGRIS_WEB_VERSION_DESC", "").strip()
 ITIGRIS_WEB_BROWSER_DESC = os.getenv("ITIGRIS_WEB_BROWSER_DESC", "").strip()
 ITIGRIS_WEB_USER_AGENT = os.getenv("ITIGRIS_WEB_USER_AGENT", "").strip()
+ITIGRIS_WEB_PAGE_UUID = os.getenv("ITIGRIS_WEB_PAGE_UUID", "").strip()
+ITIGRIS_WEB_UUID_VALUE = os.getenv("ITIGRIS_WEB_UUID_VALUE", "").strip()
+ITIGRIS_WEB_USER_ID = os.getenv("ITIGRIS_WEB_USER_ID", "").strip()
 
 ITIGRIS_WEB_LOGIN_URL = os.getenv("ITIGRIS_WEB_LOGIN_URL", f"https://optima.itigris.ru/{APP_NAME}/login/login").strip()
 
@@ -1180,6 +1183,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             extracted_page_uuid = _extract("pageUUID")
             extracted_uuid_value = _extract("uuidValue")
             extracted_user_id = _extract("userId")
+
+        # If we can't extract from HTML, allow explicit env overrides.
+        extracted_page_uuid = extracted_page_uuid or ITIGRIS_WEB_PAGE_UUID
+        extracted_uuid_value = extracted_uuid_value or ITIGRIS_WEB_UUID_VALUE
+        extracted_user_id = extracted_user_id or ITIGRIS_WEB_USER_ID
 
         login_form: Dict[str, Any] = {
             "loginAction": "true",

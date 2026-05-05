@@ -44,6 +44,9 @@ Environment:
 - `ITIGRIS_WEB_VERSION_DESC` optional (как в браузере, напр. `670_27.04.2026`)
 - `ITIGRIS_WEB_BROWSER_DESC` optional (как в браузере; можно положить User-Agent)
 - `ITIGRIS_WEB_USER_AGENT` optional (User-Agent header для web login/report requests)
+- `ITIGRIS_WEB_PAGE_UUID` optional (fallback: если сервер не смог извлечь pageUUID из pre-login HTML)
+- `ITIGRIS_WEB_UUID_VALUE` optional (fallback: если сервер не смог извлечь uuidValue из pre-login HTML)
+- `ITIGRIS_WEB_USER_ID` optional (fallback)
 - `REMAINGOODS_AUTO_REFRESH_MIN_SECONDS` optional (default 600)
 
 ## Реальный прогон MVP
