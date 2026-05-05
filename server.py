@@ -1421,8 +1421,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     },
                 )
             start_ctx = _extract_optima_ctx_from_text(start_resp.text or "")
-            report_page_uuid = start_ctx.get("pageUUID") or start_payload["pageUUID"] or ""
-            report_uuid_value = start_ctx.get("uuidValue") or start_payload["uuidValue"] or ""
+            report_page_uuid = start_ctx.get("pageUUID") or start_payload_used["pageUUID"] or ""
+            report_uuid_value = start_ctx.get("uuidValue") or start_payload_used["uuidValue"] or ""
 
             # 2) reportPage prepareData=true (usually updates uuidValue)
             prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
