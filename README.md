@@ -47,6 +47,8 @@ Environment:
 - `ITIGRIS_WEB_PAGE_UUID` optional (fallback: если сервер не смог извлечь pageUUID из pre-login HTML)
 - `ITIGRIS_WEB_UUID_VALUE` optional (fallback: если сервер не смог извлечь uuidValue из pre-login HTML)
 - `ITIGRIS_WEB_USER_ID` optional (fallback)
+- `ITIGRIS_REMAINGOODSREPORT_PAGE_UUID` optional (fallback: seed pageUUID для remainGoodsReport/startPage, если module_ctx не удалось получить автоматически)
+- `ITIGRIS_REMAINGOODSREPORT_UUID_VALUE` optional (fallback: seed uuidValue для remainGoodsReport/startPage)
 - `REMAINGOODS_AUTO_REFRESH_MIN_SECONDS` optional (default 600)
 
 ## Реальный прогон MVP

@@ -58,6 +58,10 @@ REMAINGOODS_WEB_REPORT_TYPE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_REPORT_TY
 REMAINGOODS_WEB_PRICE_TYPE = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_PRICE_TYPE", "Розничная").strip()
 REMAINGOODS_WEB_DEPARTMENT_IDS = os.getenv("ITIGRIS_REMAINGOODSREPORT_WEB_DEPARTMENT_IDS", "").strip()
 
+# remainGoodsReport module context overrides (separate from login page context).
+ITIGRIS_REMAINGOODSREPORT_PAGE_UUID = os.getenv("ITIGRIS_REMAINGOODSREPORT_PAGE_UUID", "").strip()
+ITIGRIS_REMAINGOODSREPORT_UUID_VALUE = os.getenv("ITIGRIS_REMAINGOODSREPORT_UUID_VALUE", "").strip()
+
 # Web login (preferred over static cookies; cookies expire quickly).
 ITIGRIS_WEB_LOGIN = os.getenv("ITIGRIS_WEB_LOGIN", "").strip()
 ITIGRIS_WEB_PASSWORD = os.getenv("ITIGRIS_WEB_PASSWORD", "").strip()
@@ -1364,9 +1368,19 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 report_seed_page_uuid = module_ctx["pageUUID"]
                 report_seed_uuid_value = module_ctx["uuidValue"]
             else:
-                # Fallback to login context/env if module context can't be fetched.
-                report_seed_page_uuid = (ITIGRIS_WEB_PAGE_UUID or ctx.get("pageUUID") or "").strip()
-                report_seed_uuid_value = (ITIGRIS_WEB_UUID_VALUE or ctx.get("uuidValue") or "").strip()
+                # Prefer explicit remainGoodsReport module overrides, then fallback to login context/env.
+                report_seed_page_uuid = (
+                    ITIGRIS_REMAINGOODSREPORT_PAGE_UUID
+                    or ITIGRIS_WEB_PAGE_UUID
+                    or ctx.get("pageUUID")
+                    or ""
+                ).strip()
+                report_seed_uuid_value = (
+                    ITIGRIS_REMAINGOODSREPORT_UUID_VALUE
+                    or ITIGRIS_WEB_UUID_VALUE
+                    or ctx.get("uuidValue")
+                    or ""
+                ).strip()
 
             # 1) startPage (initializes report pageUUID/uuidValue)
             start_url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/startPage"
@@ -1384,6 +1398,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "pageUUID_seed": report_seed_page_uuid,
                     "uuidValue_seed": report_seed_uuid_value,
                     "module_ctx": module_ctx,
+                    "module_overrides_present": bool(
+                        ITIGRIS_REMAINGOODSREPORT_PAGE_UUID or ITIGRIS_REMAINGOODSREPORT_UUID_VALUE
+                    ),
                 }
                 raise HTTPException(
                     status_code=502,
