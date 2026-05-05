@@ -1209,14 +1209,18 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # Older httpx: follow_redirects is client-level only.
             resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=bootstrap_headers)
 
-        if resp.status_code not in {200, 302, 303}:
+        login_status = resp.status_code
+        login_location = resp.headers.get("location") or resp.headers.get("Location") or ""
+        login_set_cookie_present = bool(resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie"))
+
+        if login_status not in {200, 302, 303}:
             raise HTTPException(
                 status_code=502,
                 detail={
                     "error": "auto_web_login_failed",
-                    "status_code": resp.status_code,
-                    "location": resp.headers.get("location") or resp.headers.get("Location"),
-                    "set_cookie_present": bool(resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie")),
+                    "status_code": login_status,
+                    "location": login_location or None,
+                    "set_cookie_present": login_set_cookie_present,
                     "sent_payload_meta": {
                         "keys": sorted(list(login_form.keys())),
                         "companyUUID": login_form.get("companyUUID"),
@@ -1230,9 +1234,29 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 },
             )
 
-        location = resp.headers.get("location") or resp.headers.get("Location") or ""
-        if not location and resp.history:
-            location = resp.history[-1].headers.get("location") or ""
+        # If login returned 200 without redirect, it's almost always "bad credentials" or a blocked login page.
+        # We consider it a failure, unless the caller explicitly relies on env context (legacy fallback).
+        if login_status == 200 and not login_location:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "auto_web_login_no_redirect",
+                    "status_code": login_status,
+                    "set_cookie_present": login_set_cookie_present,
+                    "body_snippet": (resp.text or "")[:1000],
+                    "sent_payload_meta": {
+                        "keys": sorted(list(login_form.keys())),
+                        "companyUUID": login_form.get("companyUUID"),
+                        "pageUUID_present": bool(login_form.get("pageUUID")),
+                        "uuidValue_present": bool(login_form.get("uuidValue")),
+                        "userId_present": bool(login_form.get("userId")),
+                        "versionDesc": login_form.get("versionDesc"),
+                        "browserDesc_present": bool(login_form.get("browserDesc")),
+                    },
+                },
+            )
+
+        location = login_location
         if location:
             absolute = urljoin(f"https://optima.itigris.ru/{APP_NAME}/", location.lstrip("/"))
             parsed = urlparse(absolute)
@@ -1244,19 +1268,35 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "companyUUID": (qs.get("companyUUID") or [company_uuid])[0] or company_uuid,
             }
             # Hit userStart once; some sessions set additional cookies.
+            user_start_ok = False
             try:
-                await client.get(absolute, headers=headers)
+                r2 = await client.get(absolute, headers=bootstrap_headers)
+                user_start_ok = (r2.status_code == 200)
             except Exception:
-                pass
+                user_start_ok = False
+
+            # include debug meta for downstream errors
+            cookie_names = sorted({c.name for c in client.cookies.jar})
+            ctx["_debug"] = {  # type: ignore[typeddict-item]
+                "login_status": login_status,
+                "login_location": location,
+                "userStart_ok": user_start_ok,
+                "cookie_names": cookie_names,
+            }
             return ctx
 
-        # If no redirect, fall back to env-provided context (older behavior).
-        return {
-            "userId": REMAINGOODS_WEB_USER_ID,
-            "pageUUID": REMAINGOODS_WEB_PAGE_UUID,
-            "uuidValue": REMAINGOODS_WEB_UUID_VALUE,
-            "companyUUID": company_uuid,
-        }
+        # No redirect location: this is unexpected at this point.
+        cookie_names = sorted({c.name for c in client.cookies.jar})
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "auto_web_login_missing_location",
+                "status_code": login_status,
+                "set_cookie_present": login_set_cookie_present,
+                "cookie_names": cookie_names,
+                "body_snippet": (resp.text or "")[:1000],
+            },
+        )
 
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
         # Preferred: server-side login to get fresh session.
@@ -1302,6 +1342,13 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "content_type": content_type,
                 "looks_like_login_page": looks_like_login,
                 "html_snippet": text_snippet,
+                "cookies_present": sorted({c.name for c in client.cookies.jar}) if "client" in locals() else [],
+                "report_context": {
+                    "userId_used": report_user_id if "report_user_id" in locals() else None,
+                    "pageUUID_used": ctx.get("pageUUID") if "ctx" in locals() else None,
+                    "uuidValue_used": ctx.get("uuidValue") if "ctx" in locals() else None,
+                    "login_debug": ctx.get("_debug") if "ctx" in locals() else None,
+                }
             },
         )
 
