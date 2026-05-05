@@ -1153,6 +1153,16 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         if not ITIGRIS_WEB_LOGIN or not ITIGRIS_WEB_PASSWORD or not ITIGRIS_WEB_KEY:
             raise HTTPException(status_code=500, detail="auto_web_login_not_configured")
 
+        # Bootstrap cookies (JSESSIONID, route, etc.). In a real browser a GET happens before login.
+        try:
+            await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=headers)
+        except Exception:
+            pass
+        try:
+            await client.get(f"https://optima.itigris.ru/{APP_NAME}/login", headers=headers)
+        except Exception:
+            pass
+
         login_form: Dict[str, Any] = {
             "loginAction": "true",
             "login": ITIGRIS_WEB_LOGIN,
@@ -1174,7 +1184,16 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=headers)
 
         if resp.status_code not in {200, 302, 303}:
-            raise HTTPException(status_code=502, detail={"error": "auto_web_login_failed", "status_code": resp.status_code, "body_snippet": (resp.text or "")[:1000]})
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "auto_web_login_failed",
+                    "status_code": resp.status_code,
+                    "location": resp.headers.get("location") or resp.headers.get("Location"),
+                    "set_cookie_present": bool(resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie")),
+                    "body_snippet": (resp.text or "")[:1000],
+                },
+            )
 
         location = resp.headers.get("location") or resp.headers.get("Location") or ""
         if not location and resp.history:
