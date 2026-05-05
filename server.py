@@ -63,6 +63,7 @@ ITIGRIS_WEB_PASSWORD = os.getenv("ITIGRIS_WEB_PASSWORD", "").strip()
 ITIGRIS_WEB_KEY = os.getenv("ITIGRIS_WEB_KEY", "").strip()
 ITIGRIS_WEB_VERSION_DESC = os.getenv("ITIGRIS_WEB_VERSION_DESC", "").strip()
 ITIGRIS_WEB_BROWSER_DESC = os.getenv("ITIGRIS_WEB_BROWSER_DESC", "").strip()
+ITIGRIS_WEB_USER_AGENT = os.getenv("ITIGRIS_WEB_USER_AGENT", "").strip()
 
 ITIGRIS_WEB_LOGIN_URL = os.getenv("ITIGRIS_WEB_LOGIN_URL", f"https://optima.itigris.ru/{APP_NAME}/login/login").strip()
 
@@ -1153,15 +1154,32 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         if not ITIGRIS_WEB_LOGIN or not ITIGRIS_WEB_PASSWORD or not ITIGRIS_WEB_KEY:
             raise HTTPException(status_code=500, detail="auto_web_login_not_configured")
 
-        # Bootstrap cookies (JSESSIONID, route, etc.). In a real browser a GET happens before login.
+        # Bootstrap cookies (JSESSIONID, route, etc.) and try to extract pageUUID/uuidValue if present.
+        # In a real browser a GET happens before login.
+        ua = ITIGRIS_WEB_USER_AGENT or "Mozilla/5.0"
+        bootstrap_headers = dict(headers)
+        bootstrap_headers["User-Agent"] = ua
         try:
-            await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=headers)
+            await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=bootstrap_headers)
         except Exception:
             pass
+        login_page_text = ""
         try:
-            await client.get(f"https://optima.itigris.ru/{APP_NAME}/login", headers=headers)
+            r = await client.get(f"https://optima.itigris.ru/{APP_NAME}/login", headers=bootstrap_headers)
+            login_page_text = r.text or ""
         except Exception:
             pass
+
+        extracted_page_uuid = ""
+        extracted_uuid_value = ""
+        extracted_user_id = ""
+        if login_page_text:
+            def _extract(name: str) -> str:
+                m = re.search(rf'name=\"{re.escape(name)}\"\\s+value=\"([^\"]+)\"', login_page_text)
+                return m.group(1).strip() if m else ""
+            extracted_page_uuid = _extract("pageUUID")
+            extracted_uuid_value = _extract("uuidValue")
+            extracted_user_id = _extract("userId")
 
         login_form: Dict[str, Any] = {
             "loginAction": "true",
@@ -1169,19 +1187,19 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "password": ITIGRIS_WEB_PASSWORD,
             "key": ITIGRIS_WEB_KEY,
             "versionDesc": ITIGRIS_WEB_VERSION_DESC or "server",
-            "browserDesc": ITIGRIS_WEB_BROWSER_DESC or "server",
-            "userId": "",
-            "uuidValue": "",
-            "pageUUID": "",
+            "browserDesc": ITIGRIS_WEB_BROWSER_DESC or ua,
+            "userId": extracted_user_id or "",
+            "uuidValue": extracted_uuid_value or "",
+            "pageUUID": extracted_page_uuid or "",
             "companyUUID": company_uuid,
         }
 
         # We want to capture redirect params from Location.
         try:
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=headers, follow_redirects=False)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=bootstrap_headers, follow_redirects=False)
         except TypeError:
             # Older httpx: follow_redirects is client-level only.
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=headers)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=bootstrap_headers)
 
         if resp.status_code not in {200, 302, 303}:
             raise HTTPException(
@@ -1191,6 +1209,15 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "status_code": resp.status_code,
                     "location": resp.headers.get("location") or resp.headers.get("Location"),
                     "set_cookie_present": bool(resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie")),
+                    "sent_payload_meta": {
+                        "keys": sorted(list(login_form.keys())),
+                        "companyUUID": login_form.get("companyUUID"),
+                        "pageUUID_present": bool(login_form.get("pageUUID")),
+                        "uuidValue_present": bool(login_form.get("uuidValue")),
+                        "userId_present": bool(login_form.get("userId")),
+                        "versionDesc": login_form.get("versionDesc"),
+                        "browserDesc_present": bool(login_form.get("browserDesc")),
+                    },
                     "body_snippet": (resp.text or "")[:1000],
                 },
             )

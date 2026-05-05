@@ -41,6 +41,9 @@ Environment:
 - `ITIGRIS_WEB_PASSWORD` optional
 - `ITIGRIS_WEB_KEY` optional
 - `ITIGRIS_WEB_LOGIN_URL` optional (default `https://optima.itigris.ru/{app}/login/login`)
+- `ITIGRIS_WEB_VERSION_DESC` optional (как в браузере, напр. `670_27.04.2026`)
+- `ITIGRIS_WEB_BROWSER_DESC` optional (как в браузере; можно положить User-Agent)
+- `ITIGRIS_WEB_USER_AGENT` optional (User-Agent header для web login/report requests)
 - `REMAINGOODS_AUTO_REFRESH_MIN_SECONDS` optional (default 600)
 
 ## Реальный прогон MVP
