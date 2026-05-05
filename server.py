@@ -1384,19 +1384,28 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
             # 1) startPage (initializes report pageUUID/uuidValue)
             start_url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/startPage"
-            start_payload = {
-                "userId": report_user_id,
-                "uuidValue": report_seed_uuid_value,
-                "pageUUID": report_seed_page_uuid,
-                "companyUUID": company_uuid,
-            }
-            start_resp = await client.post(start_url, data=start_payload, headers=web_headers)
+            async def _post_start_page(seed_page_uuid: str, seed_uuid_value: str) -> httpx.Response:
+                payload = {
+                    "userId": report_user_id,
+                    "uuidValue": seed_uuid_value,
+                    "pageUUID": seed_page_uuid,
+                    "companyUUID": company_uuid,
+                }
+                return await client.post(start_url, data=payload, headers=web_headers)
+
+            # Some Optima setups allow startPage without seed pageUUID/uuidValue (server generates fresh ones).
+            # Try empty seed first, then fall back.
+            start_resp = await _post_start_page("", "")
+            start_payload_used = {"pageUUID": "", "uuidValue": ""}
+            if start_resp.status_code != 200:
+                start_resp = await _post_start_page(report_seed_page_uuid, report_seed_uuid_value)
+                start_payload_used = {"pageUUID": report_seed_page_uuid, "uuidValue": report_seed_uuid_value}
             if start_resp.status_code != 200:
                 ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                     "report_user_id": report_user_id,
                     "start_status": start_resp.status_code,
-                    "pageUUID_seed": report_seed_page_uuid,
-                    "uuidValue_seed": report_seed_uuid_value,
+                    "pageUUID_seed": start_payload_used["pageUUID"],
+                    "uuidValue_seed": start_payload_used["uuidValue"],
                     "module_ctx": module_ctx,
                     "module_overrides_present": bool(
                         ITIGRIS_REMAINGOODSREPORT_PAGE_UUID or ITIGRIS_REMAINGOODSREPORT_UUID_VALUE
