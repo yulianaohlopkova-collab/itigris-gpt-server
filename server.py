@@ -1170,7 +1170,6 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         "reportType": REMAINGOODS_WEB_REPORT_TYPE,
         "priceType": REMAINGOODS_WEB_PRICE_TYPE,
         "groupByDepartment": "true",
-        "prepareData": "true",
         "companyUUID": company_uuid,
         "userId": user_id,
         "pageUUID": page_uuid,
@@ -1425,28 +1424,50 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             report_uuid_value = start_ctx.get("uuidValue") or start_payload_used["uuidValue"] or ""
 
             # 2) reportPage prepareData=true (usually updates uuidValue)
-            prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
-            prep_form["prepareData"] = "true"
-            prep_resp = await client.post(url, data=prep_form, headers=web_headers)
-            if prep_resp.status_code not in {200, 211}:
+            prep_resp: httpx.Response
+            prep_ctx: Dict[str, str] = {}
+            for attempt in range(1, 9):
+                prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
+                prep_form["prepareData"] = "true"
+                prep_resp = await client.post(url, data=prep_form, headers=web_headers)
+                if prep_resp.status_code == 200:
+                    prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
+                    report_page_uuid = prep_ctx.get("pageUUID") or report_page_uuid
+                    report_uuid_value = prep_ctx.get("uuidValue") or report_uuid_value
+                    break
+                if prep_resp.status_code == 211:
+                    await asyncio.sleep(min(2.0, 0.2 * (2 ** (attempt - 1))))
+                    continue
                 raise HTTPException(
                     status_code=502,
                     detail={
                         "error": "auto_web_prepare_failed",
                         "status_code": prep_resp.status_code,
-                        "body_snippet": (prep_resp.text or "")[:1000],
+                        "content_type": (prep_resp.headers.get("content-type") or ""),
+                        "body_snippet": (prep_resp.text or "")[:1200],
                     },
                 )
-            prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
-            report_page_uuid = prep_ctx.get("pageUUID") or report_page_uuid
-            report_uuid_value = prep_ctx.get("uuidValue") or report_uuid_value
+            else:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_prepare_timeout",
+                        "status_code": prep_resp.status_code,
+                        "content_type": (prep_resp.headers.get("content-type") or ""),
+                        "body_snippet": (prep_resp.text or "")[:1200],
+                    },
+                )
 
             # 3) reportPage final (parse this HTML)
-            final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value)
-            if final_resp.status_code == 211:
-                # Optima sometimes replies "Повторный запрос" while report is being prepared.
-                await asyncio.sleep(0.4)
+            final_resp: httpx.Response
+            for attempt in range(1, 9):
                 final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value)
+                if final_resp.status_code == 200:
+                    break
+                if final_resp.status_code == 211:
+                    await asyncio.sleep(min(2.0, 0.2 * (2 ** (attempt - 1))))
+                    continue
+                break
             # expose these values for debug below
             ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                 "report_user_id": report_user_id,
@@ -1458,6 +1479,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "module_ctx": module_ctx,
                 "seed_pageUUID": report_seed_page_uuid,
                 "seed_uuidValue": report_seed_uuid_value,
+                "start_ctx": start_ctx,
+                "start_snippet": (start_resp.text or "")[:400],
+                "prep_ctx": prep_ctx,
+                "prep_snippet": (prep_resp.text or "")[:400],
+                "final_snippet": (final_resp.text or "")[:400],
             }
             resp = final_resp
         else:
