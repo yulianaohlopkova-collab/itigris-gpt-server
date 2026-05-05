@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs
+import asyncio
 
 import httpx
 import openpyxl
@@ -1182,6 +1183,31 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
         return await client.post(url, data=form, headers=headers)
 
+    async def get_report_module_context(client: httpx.AsyncClient, user_id: str) -> Dict[str, str]:
+        """
+        Optima uses per-module pageUUID/uuidValue. For remainGoodsReport, browser initializes a separate
+        page context before calling startPage/reportPage. We best-effort fetch module page and extract
+        pageUUID/uuidValue from the HTML/JS.
+        """
+        candidates = [
+            f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport",
+            f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/",
+            f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/startPage",
+        ]
+        for u in candidates:
+            try:
+                r = await client.get(u, headers=web_headers)
+            except Exception:
+                continue
+            if r.status_code != 200:
+                continue
+            ctx = _extract_optima_ctx_from_text(r.text or "")
+            if ctx.get("pageUUID") and ctx.get("uuidValue"):
+                # Some pages don't include userId; keep provided one.
+                ctx["userId"] = ctx.get("userId") or user_id
+                return ctx
+        return {}
+
     async def login_and_get_context(client: httpx.AsyncClient) -> Dict[str, str]:
         if not ITIGRIS_WEB_LOGIN or not ITIGRIS_WEB_PASSWORD or not ITIGRIS_WEB_KEY:
             raise HTTPException(status_code=500, detail="auto_web_login_not_configured")
@@ -1332,15 +1358,42 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             if not report_user_id:
                 raise HTTPException(status_code=502, detail={"error": "auto_web_missing_user_id_for_reports"})
 
+            # 0) Initialize remainGoodsReport module context (separate pageUUID/uuidValue).
+            module_ctx = await get_report_module_context(client, report_user_id)
+            if module_ctx.get("pageUUID") and module_ctx.get("uuidValue"):
+                report_seed_page_uuid = module_ctx["pageUUID"]
+                report_seed_uuid_value = module_ctx["uuidValue"]
+            else:
+                # Fallback to login context/env if module context can't be fetched.
+                report_seed_page_uuid = (ITIGRIS_WEB_PAGE_UUID or ctx.get("pageUUID") or "").strip()
+                report_seed_uuid_value = (ITIGRIS_WEB_UUID_VALUE or ctx.get("uuidValue") or "").strip()
+
             # 1) startPage (initializes report pageUUID/uuidValue)
             start_url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/startPage"
             start_payload = {
                 "userId": report_user_id,
-                "uuidValue": ctx.get("uuidValue") or ITIGRIS_WEB_UUID_VALUE or "",
-                "pageUUID": ctx.get("pageUUID") or ITIGRIS_WEB_PAGE_UUID or "",
+                "uuidValue": report_seed_uuid_value,
+                "pageUUID": report_seed_page_uuid,
                 "companyUUID": company_uuid,
             }
             start_resp = await client.post(start_url, data=start_payload, headers=web_headers)
+            if start_resp.status_code != 200:
+                ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
+                    "report_user_id": report_user_id,
+                    "start_status": start_resp.status_code,
+                    "pageUUID_seed": report_seed_page_uuid,
+                    "uuidValue_seed": report_seed_uuid_value,
+                    "module_ctx": module_ctx,
+                }
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_startPage_failed",
+                        "status_code": start_resp.status_code,
+                        "body_snippet": (start_resp.text or "")[:1000],
+                        "report_debug": ctx.get("_report_ctx"),
+                    },
+                )
             start_ctx = _extract_optima_ctx_from_text(start_resp.text or "")
             report_page_uuid = start_ctx.get("pageUUID") or start_payload["pageUUID"] or ""
             report_uuid_value = start_ctx.get("uuidValue") or start_payload["uuidValue"] or ""
@@ -1349,12 +1402,25 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
             prep_form["prepareData"] = "true"
             prep_resp = await client.post(url, data=prep_form, headers=web_headers)
+            if prep_resp.status_code not in {200, 211}:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_prepare_failed",
+                        "status_code": prep_resp.status_code,
+                        "body_snippet": (prep_resp.text or "")[:1000],
+                    },
+                )
             prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
             report_page_uuid = prep_ctx.get("pageUUID") or report_page_uuid
             report_uuid_value = prep_ctx.get("uuidValue") or report_uuid_value
 
             # 3) reportPage final (parse this HTML)
             final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value)
+            if final_resp.status_code == 211:
+                # Optima sometimes replies "Повторный запрос" while report is being prepared.
+                await asyncio.sleep(0.4)
+                final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value)
             # expose these values for debug below
             ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                 "report_user_id": report_user_id,
@@ -1363,6 +1429,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "final_status": final_resp.status_code,
                 "pageUUID": report_page_uuid,
                 "uuidValue": report_uuid_value,
+                "module_ctx": module_ctx,
+                "seed_pageUUID": report_seed_page_uuid,
+                "seed_uuidValue": report_seed_uuid_value,
             }
             resp = final_resp
         else:
