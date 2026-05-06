@@ -1643,6 +1643,20 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         if not (user_id and page_uuid and uuid_value):
             return {}
 
+        def _ctx_from_url(u: str) -> Dict[str, str]:
+            try:
+                absolute = urljoin(f"https://optima.itigris.ru/{APP_NAME}/", u.lstrip("/"))
+                parsed = urlparse(absolute)
+                qs = parse_qs(parsed.query)
+                return {
+                    "userId": (qs.get("userId") or [""])[0],
+                    "pageUUID": (qs.get("pageUUID") or [""])[0],
+                    "uuidValue": (qs.get("uuidValue") or [""])[0],
+                    "companyUUID": (qs.get("companyUUID") or [company_uuid])[0] or company_uuid,
+                }
+            except Exception:
+                return {}
+
         # 1) openMenuElement (POST) -> 302
         open1_url = f"https://optima.itigris.ru/{APP_NAME}/menu/openMenuElement?menuItem=accountantReports"
         payload = {"userId": user_id, "pageUUID": page_uuid, "uuidValue": uuid_value, "companyUUID": company_uuid}
@@ -1651,11 +1665,16 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         if r1.status_code not in {302, 303} or not loc1:
             return {}
 
+        # Sometimes the new page context is already present in redirect URL.
+        ctx1 = _ctx_from_url(loc1)
+
         # 2) openMenuElement2 (GET) -> 302
         r2 = await _follow_location(client, loc1)
         loc2 = r2.headers.get("location") or r2.headers.get("Location") or ""
         if r2.status_code not in {302, 303} or not loc2:
             return {}
+
+        ctx2 = _ctx_from_url(loc2)
 
         # 3) startPageAccountant (GET) -> 200 HTML
         r3 = await _follow_location(client, loc2)
@@ -1667,9 +1686,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         parsed = urlparse(final_url)
         qs = parse_qs(parsed.query)
         out = {
-            "userId": (qs.get("userId") or [user_id])[0] or user_id,
-            "pageUUID": (qs.get("pageUUID") or [page_uuid])[0] or page_uuid,
-            "uuidValue": (qs.get("uuidValue") or [uuid_value])[0] or uuid_value,
+            "userId": (qs.get("userId") or [ctx2.get("userId") or ctx1.get("userId") or user_id])[0] or user_id,
+            "pageUUID": (qs.get("pageUUID") or [ctx2.get("pageUUID") or ctx1.get("pageUUID") or page_uuid])[0] or page_uuid,
+            "uuidValue": (qs.get("uuidValue") or [ctx2.get("uuidValue") or ctx1.get("uuidValue") or uuid_value])[0] or uuid_value,
             "companyUUID": company_uuid,
         }
         html_ctx = _extract_optima_ctx_from_text(r3.text or "")
@@ -1730,8 +1749,28 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 report_seed_uuid_value or ""
             )
 
-            start_resp = await _post_start_page(preferred_seed_page_uuid, preferred_seed_uuid_value)
             start_payload_used = {"pageUUID": preferred_seed_page_uuid, "uuidValue": preferred_seed_uuid_value}
+            start_resp = await _post_start_page(start_payload_used["pageUUID"], start_payload_used["uuidValue"])
+
+            # startPage may legitimately return 211 ("Повторный запрос") while the page/session context settles.
+            # Retry with backoff; also attempt to refresh the reports navigation context.
+            for attempt in range(1, 7):
+                if start_resp.status_code == 200:
+                    break
+                if start_resp.status_code == 211:
+                    try:
+                        refreshed = await _init_accountant_reports_ctx(client, ctx)
+                        if refreshed.get("pageUUID") and refreshed.get("uuidValue"):
+                            module_ctx = refreshed
+                            start_payload_used["pageUUID"] = refreshed["pageUUID"]
+                            start_payload_used["uuidValue"] = refreshed["uuidValue"]
+                    except Exception:
+                        pass
+                    await asyncio.sleep(min(2.0, 0.2 * (2 ** (attempt - 1))))
+                    start_resp = await _post_start_page(start_payload_used["pageUUID"], start_payload_used["uuidValue"])
+                    continue
+                break
+
             if start_resp.status_code != 200:
                 ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                     "report_user_id": report_user_id,
