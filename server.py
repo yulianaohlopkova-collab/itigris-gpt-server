@@ -83,6 +83,9 @@ ITIGRIS_WEB_UUID_VALUE = os.getenv("ITIGRIS_WEB_UUID_VALUE", "").strip()
 ITIGRIS_WEB_USER_ID = os.getenv("ITIGRIS_WEB_USER_ID", "").strip()
 
 ITIGRIS_WEB_LOGIN_URL = os.getenv("ITIGRIS_WEB_LOGIN_URL", f"https://optima.itigris.ru/{APP_NAME}/login/login").strip()
+# Some Optima installs require a specific pageUUID for the login POST (browser sends a stable one).
+# If unset, server will try to extract it from the login page; otherwise it will POST without it.
+ITIGRIS_WEB_LOGIN_PAGE_UUID = os.getenv("ITIGRIS_WEB_LOGIN_PAGE_UUID", "").strip()
 
 
 DEPARTMENTS: Dict[str, int] = {
@@ -1504,12 +1507,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             extracted_uuid_value = extracted.get("uuidValue") or ""
             extracted_user_id = extracted.get("userId") or ""
 
-        # IMPORTANT: do not force pageUUID/uuidValue/userId from env into the login request.
-        # In practice Optima may generate a different (and working) page context when these are empty,
-        # as seen in browser HAR captures. We still use ITIGRIS_WEB_USER_ID later for report calls.
-        extracted_page_uuid = extracted_page_uuid or ""
-        extracted_uuid_value = extracted_uuid_value or ""
+        # Login POST: browser includes pageUUID/uuidValue/userId in the payload.
+        # userId is often an empty string, but pageUUID is usually required (stable per install),
+        # and uuidValue can be any fresh UUID.
         extracted_user_id = extracted_user_id or ""
+        extracted_page_uuid = extracted_page_uuid or ITIGRIS_WEB_LOGIN_PAGE_UUID or ""
+        extracted_uuid_value = extracted_uuid_value or str(uuid.uuid4())
 
         login_form: Dict[str, Any] = {
             "loginAction": "true",
@@ -1546,9 +1549,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "sent_payload_meta": {
                         "keys": sorted(list(login_form.keys())),
                         "companyUUID": login_form.get("companyUUID"),
-                        "pageUUID_present": bool(login_form.get("pageUUID")),
-                        "uuidValue_present": bool(login_form.get("uuidValue")),
-                        "userId_present": bool(login_form.get("userId")),
+                        "pageUUID_key_present": "pageUUID" in login_form,
+                        "uuidValue_key_present": "uuidValue" in login_form,
+                        "userId_key_present": "userId" in login_form,
+                        "pageUUID_nonempty": bool(login_form.get("pageUUID")),
+                        "uuidValue_nonempty": bool(login_form.get("uuidValue")),
+                        "userId_nonempty": bool(login_form.get("userId")),
                         "versionDesc": login_form.get("versionDesc"),
                         "browserDesc_present": bool(login_form.get("browserDesc")),
                     },
@@ -1569,9 +1575,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "sent_payload_meta": {
                         "keys": sorted(list(login_form.keys())),
                         "companyUUID": login_form.get("companyUUID"),
-                        "pageUUID_present": bool(login_form.get("pageUUID")),
-                        "uuidValue_present": bool(login_form.get("uuidValue")),
-                        "userId_present": bool(login_form.get("userId")),
+                        "pageUUID_key_present": "pageUUID" in login_form,
+                        "uuidValue_key_present": "uuidValue" in login_form,
+                        "userId_key_present": "userId" in login_form,
+                        "pageUUID_nonempty": bool(login_form.get("pageUUID")),
+                        "uuidValue_nonempty": bool(login_form.get("uuidValue")),
+                        "userId_nonempty": bool(login_form.get("userId")),
                         "versionDesc": login_form.get("versionDesc"),
                         "browserDesc_present": bool(login_form.get("browserDesc")),
                     },
