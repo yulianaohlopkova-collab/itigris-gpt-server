@@ -1239,10 +1239,19 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
     # Another common pattern: updateMainPageData(..., "<uuidValue>", "");
     # Here the uuidValue is typically the last UUID argument in the call.
     if not out["uuidValue"]:
-        # Capture the *last* UUID inside updateMainPageData(...) before the trailing ,"" / ''.
-        m = _safe_search(rf"updateMainPageData\\?\\(.*?({uuid_re.pattern})\\s*,\\s*['\\\"]\\s*['\\\"]\\s*\\)\\s*;")
-        if m:
-            out["uuidValue"] = m.group(1)
+        # Avoid brittle regex: locate the call and take the last UUID inside its argument list.
+        try:
+            marker = "updateMainPageData("
+            i = src.find(marker)
+            if i != -1:
+                j = src.find(");", i)
+                if j != -1:
+                    call = src[i : j + 2]
+                    found = [m.group(0) for m in uuid_re.finditer(call)]
+                    if found:
+                        out["uuidValue"] = found[-1]
+        except Exception:
+            pass
 
     # remainGoodsReport: startPage HTML often carries the *next* uuidValue (used for reportPage/prepareData)
     # inside updateMainPageData(..., "<uuidValue>", ""), without an explicit "uuidValue=" label.
