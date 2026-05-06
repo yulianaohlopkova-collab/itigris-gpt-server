@@ -1664,11 +1664,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # and candidate[1] as uuidValue if our uuidValue is empty.
             candidates_raw = (start_ctx.get("_uuid_candidates") or "").strip()
             uuid_candidates = [u.strip() for u in candidates_raw.split(",") if u.strip()]
-            if uuid_candidates:
-                if not report_page_uuid and len(uuid_candidates) >= 1:
-                    report_page_uuid = uuid_candidates[0]
-                if not report_uuid_value and len(uuid_candidates) >= 2:
-                    report_uuid_value = uuid_candidates[1]
+            # Confirmed by DevTools: for remainGoodsReport, pageUUID stays stable while uuidValue changes.
+            # The startPage HTML often contains two UUID-like values even if they are not labeled.
+            # In that case, treat candidate[0] as pageUUID and candidate[1] as uuidValue, overriding seed/login UUIDs.
+            if len(uuid_candidates) >= 2:
+                report_page_uuid = uuid_candidates[0]
+                report_uuid_value = uuid_candidates[1]
 
             prep_debug: Dict[str, Any] = {
                 "pageUUID": report_page_uuid,
