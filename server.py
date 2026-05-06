@@ -1230,16 +1230,174 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # NOTE: For httpx.AsyncClient we must avoid passing "data" as a list of tuples with repeated
         # keys, because httpx may build a sync byte stream (IteratorByteStream) which fails at send time.
         # Use dict + list values instead.
+        # NOTE: Optima's report endpoints may expect the full form payload (even if fields are empty).
+        # We mirror the browser payload shape, defaulting optional filters to empty strings.
         return {
         "date": date_ddmmyyyy,
-        "reportType": REMAINGOODS_WEB_REPORT_TYPE,
-        "priceType": REMAINGOODS_WEB_PRICE_TYPE,
-        "groupByDepartment": "true",
-        "companyUUID": company_uuid,
-        "userId": user_id,
-        "pageUUID": page_uuid,
-        "uuidValue": uuid_value,
+        # department selection
+        "department_input0": "",
         "department": dep_ids,
+        # supply/supplier/price ranges
+        "supplyDateFrom": "",
+        "supplyDateTo": "",
+        "supplier_input0": "",
+        "supplier": "",
+        "priceFrom": "",
+        "priceTo": "",
+        # grouping
+        "groupByDepartment_input0": "",
+        "groupByDepartment": "true",
+        # report type / price type
+        "reportType_input0": REMAINGOODS_WEB_REPORT_TYPE,
+        "reportType": REMAINGOODS_WEB_REPORT_TYPE,
+        "priceType_input0": REMAINGOODS_WEB_PRICE_TYPE,
+        "priceType": REMAINGOODS_WEB_PRICE_TYPE,
+        # accessory filters
+        "accessory.category_input0": "",
+        "accessory.category": "",
+        "accessory.model": "",
+        # contact lenses filters
+        "cl.manufacturer_input0": "",
+        "cl.manufacturer": "",
+        "cl.name": "",
+        "cl.packageNum_input0": "",
+        "cl.packageNum": "",
+        "cl.color_input0": "",
+        "cl.color": "",
+        "cl.dioptresFrom_input0": "",
+        "cl.dioptresFrom": "",
+        "cl.dioptresTo_input0": "",
+        "cl.dioptresTo": "",
+        "cl.cylinderFrom_input0": "",
+        "cl.cylinderFrom": "",
+        "cl.cylinderTo_input0": "",
+        "cl.cylinderTo": "",
+        "cl.radiusOfCurvature_input0": "",
+        "cl.radiusOfCurvature": "",
+        "cl.diameter_input0": "",
+        "cl.diameter": "",
+        "cl.expirationDateFrom": "",
+        "cl.expirationDateTo": "",
+        "cl.wearingPeriod_input0": "",
+        "cl.wearingPeriod": "",
+        "cl._groupByExpirationDate": "",
+        "cl._criticalDateOnly": "",
+        # lenses filters
+        "lenses.manufacturer_input0": "",
+        "lenses.manufacturer": "",
+        "lenses.brand_input0": "",
+        "lenses.brand": "",
+        "lenses.index_input0": "",
+        "lenses.index": "",
+        "lenses.diameter_input0": "",
+        "lenses.diameter": "",
+        "lenses.type_input0": "",
+        "lenses.type": "",
+        "lenses.material_input0": "",
+        "lenses.material": "",
+        "lenses.dioptresFrom_input0": "",
+        "lenses.dioptresFrom": "",
+        "lenses.dioptresTo_input0": "",
+        "lenses.dioptresTo": "",
+        "lenses.cylinderFrom_input0": "",
+        "lenses.cylinderFrom": "",
+        "lenses.cylinderTo_input0": "",
+        "lenses.cylinderTo": "",
+        "lenses.geometry_input0": "",
+        "lenses.geometry": "",
+        "lenses.lensClass_input0": "",
+        "lenses.lensClass": "",
+        "lenses.technology_input0": "",
+        "lenses.technology": "",
+        "lenses.color_input0": "",
+        "lenses.color": "",
+        "lenses.cover_input0": "",
+        "lenses.cover": "",
+        # glasses filters
+        "glasses.manufacturer_input0": "",
+        "glasses.manufacturer": "",
+        "glasses.brand_input0": "",
+        "glasses.brand": "",
+        "glasses.model": "",
+        "glasses.material_input0": "",
+        "glasses.material": "",
+        "glasses.type_input0": "",
+        "glasses.type": "",
+        "glasses.targetGroup_input0": "",
+        "glasses.targetGroup": "",
+        "glasses.design_input0": "",
+        "glasses.design": "",
+        # extras/glasses
+        "extras-glasses.manufacturer_input0": "",
+        "extras-glasses.manufacturer": "",
+        "extras-glasses.brand_input0": "",
+        "extras-glasses.brand": "",
+        "extras-glasses.model": "",
+        "extras-glasses.material_input0": "",
+        "extras-glasses.material": "",
+        "extras-glasses.type_input0": "",
+        "extras-glasses.type": "",
+        "extras-glasses.targetGroup_input0": "",
+        "extras-glasses.targetGroup": "",
+        # extras/lenses
+        "extras-lenses.dioptresFrom_input0": "",
+        "extras-lenses.dioptresFrom": "",
+        "extras-lenses.dioptresTo_input0": "",
+        "extras-lenses.dioptresTo": "",
+        "extras-lenses.cylinderFrom_input0": "",
+        "extras-lenses.cylinderFrom": "",
+        "extras-lenses.cylinderTo_input0": "",
+        "extras-lenses.cylinderTo": "",
+        "extras-lenses.manufacturer_input0": "",
+        "extras-lenses.manufacturer": "",
+        "extras-lenses.brand_input0": "",
+        "extras-lenses.brand": "",
+        # semi-finished
+        "semi.manufacturer_input0": "",
+        "semi.manufacturer": "",
+        "semi.brand_input0": "",
+        "semi.brand": "",
+        "semi.index_input0": "",
+        "semi.index": "",
+        "semi.diameter_input0": "",
+        "semi.diameter": "",
+        "semi.base_input0": "",
+        "semi.base": "",
+        "semi.material_input0": "",
+        "semi.material": "",
+        "semi.geometry_input0": "",
+        "semi.geometry": "",
+        "semi.type_input0": "",
+        "semi.type": "",
+        "semi.technology_input0": "",
+        "semi.technology": "",
+        "semi.color_input0": "",
+        "semi.color": "",
+        "semi.lensClass_input0": "",
+        "semi.lensClass": "",
+        "semi.cover_input0": "",
+        "semi.cover": "",
+        # sunglasses
+        "sunglasses.manufacturer_input0": "",
+        "sunglasses.manufacturer": "",
+        "sunglasses.brand_input0": "",
+        "sunglasses.brand": "",
+        "sunglasses.model": "",
+        "sunglasses.material_input0": "",
+        "sunglasses.material": "",
+        "sunglasses.type_input0": "",
+        "sunglasses.type": "",
+        "sunglasses.frameType_input0": "",
+        "sunglasses.frameType": "",
+        "sunglasses.targetGroup_input0": "",
+        "sunglasses.targetGroup": "",
+        "sunglasses.design_input0": "",
+        "sunglasses.design": "",
+        # auth/session context
+        "userId": user_id,
+        "uuidValue": uuid_value,
+        "pageUUID": page_uuid,
+        "companyUUID": company_uuid,
         }
 
     url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
@@ -1501,68 +1659,54 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             prep_ctx: Dict[str, str] = {}
 
             # If startPage HTML doesn't expose named pageUUID/uuidValue, it may still contain UUIDs.
-            # Try them as (pageUUID, uuidValue) candidates to avoid looping forever on login UUIDs.
+            # Based on DevTools: pageUUID stays constant; uuidValue changes between prepare and final.
+            # So do NOT swap candidates as pairs. Use candidate[0] as pageUUID only if our pageUUID is empty,
+            # and candidate[1] as uuidValue if our uuidValue is empty.
             candidates_raw = (start_ctx.get("_uuid_candidates") or "").strip()
             uuid_candidates = [u.strip() for u in candidates_raw.split(",") if u.strip()]
+            if uuid_candidates:
+                if not report_page_uuid and len(uuid_candidates) >= 1:
+                    report_page_uuid = uuid_candidates[0]
+                if not report_uuid_value and len(uuid_candidates) >= 2:
+                    report_uuid_value = uuid_candidates[1]
 
-            tried_pairs: List[Tuple[str, str]] = []
-            pair_debugs: List[Dict[str, Any]] = []
-
-            candidate_pairs: List[Tuple[str, str]] = []
-            if len(uuid_candidates) >= 2:
-                candidate_pairs.append((uuid_candidates[0], uuid_candidates[1]))
-                if uuid_candidates[0] != uuid_candidates[1]:
-                    candidate_pairs.append((uuid_candidates[1], uuid_candidates[0]))
-            # Fallback to whatever we currently have (may be seed/login values).
-            candidate_pairs.append((report_page_uuid, report_uuid_value))
+            prep_debug: Dict[str, Any] = {
+                "pageUUID": report_page_uuid,
+                "uuidValue": report_uuid_value,
+                "attempts": [],
+            }
 
             prepare_ok = False
-            for pair_idx, (pair_page_uuid, pair_uuid_value) in enumerate(candidate_pairs, start=1):
-                if (pair_page_uuid, pair_uuid_value) in tried_pairs:
-                    continue
-                tried_pairs.append((pair_page_uuid, pair_uuid_value))
-
-                prep_debug: Dict[str, Any] = {
-                    "pair_idx": pair_idx,
-                    "pageUUID": pair_page_uuid,
-                    "uuidValue": pair_uuid_value,
-                    "attempts": [],
-                }
-
-                report_page_uuid = pair_page_uuid
-                report_uuid_value = pair_uuid_value
-
-                for attempt in range(1, 9):
-                    prep_form = build_report_form(
-                        user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value
+            for attempt in range(1, 13):
+                prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
+                prep_form["prepareData"] = "true"
+                prep_resp = await client.post(url, data=prep_form, headers=web_headers)
+                if prep_resp.status_code == 200:
+                    prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
+                    # pageUUID should remain stable; uuidValue may update.
+                    report_uuid_value = (prep_ctx.get("uuidValue") or "").strip() or report_uuid_value
+                    prepare_ok = True
+                    break
+                if prep_resp.status_code == 211:
+                    sleep_s = min(3.0, 0.25 * (2 ** (attempt - 1)))
+                    prep_debug["attempts"].append(
+                        {
+                            "attempt": attempt,
+                            "status_code": 211,
+                            "sleep_s": sleep_s,
+                            "payload_meta": {
+                                "userId": prep_form.get("userId"),
+                                "pageUUID": prep_form.get("pageUUID"),
+                                "uuidValue": prep_form.get("uuidValue"),
+                                "prepareData": prep_form.get("prepareData"),
+                                "groupByDepartment": prep_form.get("groupByDepartment"),
+                                "departments_count": len(dep_ids),
+                            },
+                        }
                     )
-                    prep_form["prepareData"] = "true"
-                    prep_resp = await client.post(url, data=prep_form, headers=web_headers)
-                    if prep_resp.status_code == 200:
-                        prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
-                        report_page_uuid = (prep_ctx.get("pageUUID") or "").strip() or report_page_uuid
-                        report_uuid_value = (prep_ctx.get("uuidValue") or "").strip() or report_uuid_value
-                        prepare_ok = True
-                        break
-                    if prep_resp.status_code == 211:
-                        sleep_s = min(2.0, 0.2 * (2 ** (attempt - 1)))
-                        prep_debug["attempts"].append(
-                            {
-                                "attempt": attempt,
-                                "status_code": 211,
-                                "sleep_s": sleep_s,
-                                "payload_meta": {
-                                    "userId": prep_form.get("userId"),
-                                    "pageUUID": prep_form.get("pageUUID"),
-                                    "uuidValue": prep_form.get("uuidValue"),
-                                    "prepareData": prep_form.get("prepareData"),
-                                    "groupByDepartment": prep_form.get("groupByDepartment"),
-                                    "departments_count": len(dep_ids),
-                                },
-                            }
-                        )
-                        await asyncio.sleep(sleep_s)
-                        continue
+                    await asyncio.sleep(sleep_s)
+                    continue
+
                 cookie_names = sorted({c.name for c in client.cookies.jar})
                 ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                     "report_user_id": report_user_id,
@@ -1576,10 +1720,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "module_ctx": module_ctx,
                     "login_debug": ctx.get("_debug"),
                     "cookie_names": cookie_names,
-                    "prepare_pair_idx": prep_debug.get("pair_idx"),
-                    "prepare_pair_pageUUID": prep_debug.get("pageUUID"),
-                    "prepare_pair_uuidValue": prep_debug.get("uuidValue"),
-                    "prepare_attempts": prep_debug.get("attempts"),
+                    "prepare_debug": prep_debug,
                 }
                 raise HTTPException(
                     status_code=502,
@@ -1592,10 +1733,6 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     },
                 )
 
-                pair_debugs.append(prep_debug)
-                if prepare_ok:
-                    break
-
             if not prepare_ok:
                 ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                     "report_user_id": report_user_id,
@@ -1606,7 +1743,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "seed_uuidValue": report_seed_uuid_value,
                     "start_ctx": start_ctx,
                     "start_snippet": (start_resp.text or "")[:400],
-                    "prepare_pairs_debug": pair_debugs,
+                    "prepare_debug": prep_debug,
                     "module_ctx": module_ctx,
                 }
                 raise HTTPException(
