@@ -1624,6 +1624,60 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             },
         )
 
+    async def _follow_location(client: httpx.AsyncClient, loc: str) -> httpx.Response:
+        absolute = urljoin(f"https://optima.itigris.ru/{APP_NAME}/", loc.lstrip("/"))
+        return await client.get(absolute, headers=web_headers, follow_redirects=False)
+
+    async def _init_accountant_reports_ctx(client: httpx.AsyncClient, base_ctx: Dict[str, str]) -> Dict[str, str]:
+        """
+        Reproduce the exact navigation chain seen in HAR before remainGoodsReport/startPage:
+          POST /menu/openMenuElement?menuItem=accountantReports
+          GET  /menu/openMenuElement2?menuItem=accountantReports&...
+          GET  /reportsStart/startPageAccountant?pageUUID=...&userId=...&uuidValue=...
+
+        The important outcome: a fresh pageUUID/uuidValue pair suitable as seed for remainGoodsReport/startPage.
+        """
+        user_id = (base_ctx.get("userId") or ITIGRIS_WEB_USER_ID or "").strip()
+        page_uuid = (base_ctx.get("pageUUID") or "").strip()
+        uuid_value = (base_ctx.get("uuidValue") or "").strip()
+        if not (user_id and page_uuid and uuid_value):
+            return {}
+
+        # 1) openMenuElement (POST) -> 302
+        open1_url = f"https://optima.itigris.ru/{APP_NAME}/menu/openMenuElement?menuItem=accountantReports"
+        payload = {"userId": user_id, "pageUUID": page_uuid, "uuidValue": uuid_value, "companyUUID": company_uuid}
+        r1 = await client.post(open1_url, data=payload, headers=web_headers, follow_redirects=False)
+        loc1 = r1.headers.get("location") or r1.headers.get("Location") or ""
+        if r1.status_code not in {302, 303} or not loc1:
+            return {}
+
+        # 2) openMenuElement2 (GET) -> 302
+        r2 = await _follow_location(client, loc1)
+        loc2 = r2.headers.get("location") or r2.headers.get("Location") or ""
+        if r2.status_code not in {302, 303} or not loc2:
+            return {}
+
+        # 3) startPageAccountant (GET) -> 200 HTML
+        r3 = await _follow_location(client, loc2)
+        if r3.status_code != 200:
+            return {}
+
+        # Prefer context from the final URL query (closest to what browser uses), fallback to HTML.
+        final_url = str(r3.request.url)
+        parsed = urlparse(final_url)
+        qs = parse_qs(parsed.query)
+        out = {
+            "userId": (qs.get("userId") or [user_id])[0] or user_id,
+            "pageUUID": (qs.get("pageUUID") or [page_uuid])[0] or page_uuid,
+            "uuidValue": (qs.get("uuidValue") or [uuid_value])[0] or uuid_value,
+            "companyUUID": company_uuid,
+        }
+        html_ctx = _extract_optima_ctx_from_text(r3.text or "")
+        if html_ctx.get("pageUUID") and html_ctx.get("uuidValue"):
+            out["pageUUID"] = html_ctx.get("pageUUID") or out["pageUUID"]
+            out["uuidValue"] = html_ctx.get("uuidValue") or out["uuidValue"]
+        return out
+
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
         # Preferred: server-side login to get fresh session.
         if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
@@ -1634,25 +1688,28 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             if not report_user_id:
                 raise HTTPException(status_code=502, detail={"error": "auto_web_missing_user_id_for_reports"})
 
-            # 0) Initialize remainGoodsReport module context (separate pageUUID/uuidValue).
-            module_ctx = await get_report_module_context(client, report_user_id)
-            if module_ctx.get("pageUUID") and module_ctx.get("uuidValue"):
-                report_seed_page_uuid = module_ctx["pageUUID"]
-                report_seed_uuid_value = module_ctx["uuidValue"]
-            else:
-                # Prefer explicit remainGoodsReport module overrides, then fallback to login context/env.
-                report_seed_page_uuid = (
-                    ITIGRIS_REMAINGOODSREPORT_PAGE_UUID
-                    or ITIGRIS_WEB_PAGE_UUID
-                    or ctx.get("pageUUID")
-                    or ""
-                ).strip()
-                report_seed_uuid_value = (
-                    ITIGRIS_REMAINGOODSREPORT_UUID_VALUE
-                    or ITIGRIS_WEB_UUID_VALUE
-                    or ctx.get("uuidValue")
-                    or ""
-                ).strip()
+            # 0) Initialize navigation context for reports as seen in HAR.
+            # This yields the correct seed pageUUID/uuidValue expected by remainGoodsReport/startPage.
+            module_ctx: Dict[str, str] = {}
+            try:
+                module_ctx = await _init_accountant_reports_ctx(client, ctx)
+            except Exception:
+                module_ctx = {}
+
+            report_seed_page_uuid = (
+                (module_ctx.get("pageUUID") or "").strip()
+                or (ITIGRIS_REMAINGOODSREPORT_PAGE_UUID or "").strip()
+                or (ITIGRIS_WEB_PAGE_UUID or "").strip()
+                or (ctx.get("pageUUID") or "").strip()
+                or ""
+            )
+            report_seed_uuid_value = (
+                (module_ctx.get("uuidValue") or "").strip()
+                or (ITIGRIS_REMAINGOODSREPORT_UUID_VALUE or "").strip()
+                or (ITIGRIS_WEB_UUID_VALUE or "").strip()
+                or (ctx.get("uuidValue") or "").strip()
+                or ""
+            )
 
             # 1) startPage (initializes report pageUUID/uuidValue)
             start_url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/startPage"
@@ -1665,19 +1722,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 }
                 return await client.post(start_url, data=payload, headers=web_headers)
 
-            # startPage expects "current app" pageUUID/uuidValue (not the remainGoodsReport ones).
-            # Prefer module_ctx overrides, then login/main ctx, then explicit env seeds.
+            # startPage expects the reports navigation context (HAR chain).
             preferred_seed_page_uuid = (
-                (module_ctx.get("pageUUID") or "").strip()
-                or (ctx.get("pageUUID") or "").strip()
-                or report_seed_page_uuid
-                or ""
+                report_seed_page_uuid or ""
             )
             preferred_seed_uuid_value = (
-                (module_ctx.get("uuidValue") or "").strip()
-                or (ctx.get("uuidValue") or "").strip()
-                or report_seed_uuid_value
-                or ""
+                report_seed_uuid_value or ""
             )
 
             start_resp = await _post_start_page(preferred_seed_page_uuid, preferred_seed_uuid_value)
@@ -1719,16 +1769,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             if labeled_uuid_value:
                 report_uuid_value = labeled_uuid_value
 
-            candidates_raw = (start_ctx.get("_uuid_candidates") or "").strip()
-            uuid_candidates = [u.strip() for u in candidates_raw.split(",") if u.strip()]
-            candidate_page_uuid = uuid_candidates[0] if len(uuid_candidates) >= 1 else ""
-            candidate_uuid_value = uuid_candidates[1] if len(uuid_candidates) >= 2 else ""
-
             prep_debug: Dict[str, Any] = {
                 "pageUUID": report_page_uuid,
                 "uuidValue": report_uuid_value,
-                "candidate_pageUUID": candidate_page_uuid or None,
-                "candidate_uuidValue": candidate_uuid_value or None,
                 "attempts": [],
             }
 
@@ -1744,28 +1787,6 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     prepare_ok = True
                     break
                 if prep_resp.status_code == 211:
-                    # If we are stuck with seed/login UUIDs, try switching to startPage candidates once.
-                    if (
-                        attempt == 1
-                        and candidate_page_uuid
-                        and candidate_uuid_value
-                        and (report_page_uuid, report_uuid_value) != (candidate_page_uuid, candidate_uuid_value)
-                    ):
-                        # Try candidate context immediately.
-                        report_page_uuid = candidate_page_uuid
-                        report_uuid_value = candidate_uuid_value
-                        prep_debug["attempts"].append(
-                            {
-                                "attempt": attempt,
-                                "status_code": 211,
-                                "switch_to_candidates": True,
-                                "payload_meta": {
-                                    "pageUUID": report_page_uuid,
-                                    "uuidValue": report_uuid_value,
-                                },
-                            }
-                        )
-                        continue
                     sleep_s = min(3.0, 0.25 * (2 ** (attempt - 1)))
                     prep_debug["attempts"].append(
                         {
