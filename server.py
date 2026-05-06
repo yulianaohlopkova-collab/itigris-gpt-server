@@ -1490,45 +1490,85 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # 2) reportPage prepareData=true (usually updates uuidValue)
             prep_resp: httpx.Response
             prep_ctx: Dict[str, str] = {}
-            prep_debug: Dict[str, Any] = {"attempts": []}
-            for attempt in range(1, 9):
-                prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
-                prep_form["prepareData"] = "true"
-                prep_resp = await client.post(url, data=prep_form, headers=web_headers)
-                if prep_resp.status_code == 200:
-                    prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
-                    report_page_uuid = prep_ctx.get("pageUUID") or report_page_uuid
-                    report_uuid_value = prep_ctx.get("uuidValue") or report_uuid_value
-                    break
-                if prep_resp.status_code == 211:
-                    sleep_s = min(2.0, 0.2 * (2 ** (attempt - 1)))
-                    prep_debug["attempts"].append(
-                        {
-                            "attempt": attempt,
-                            "status_code": 211,
-                            "sleep_s": sleep_s,
-                            "payload_meta": {
-                                "userId": prep_form.get("userId"),
-                                "pageUUID": prep_form.get("pageUUID"),
-                                "uuidValue": prep_form.get("uuidValue"),
-                                "prepareData": prep_form.get("prepareData"),
-                                "groupByDepartment": prep_form.get("groupByDepartment"),
-                                "departments_count": len(dep_ids),
-                            },
-                        }
-                    )
-                    await asyncio.sleep(sleep_s)
+
+            # If startPage HTML doesn't expose named pageUUID/uuidValue, it may still contain UUIDs.
+            # Try them as (pageUUID, uuidValue) candidates to avoid looping forever on login UUIDs.
+            candidates_raw = (start_ctx.get("_uuid_candidates") or "").strip()
+            uuid_candidates = [u.strip() for u in candidates_raw.split(",") if u.strip()]
+
+            tried_pairs: List[Tuple[str, str]] = []
+            pair_debugs: List[Dict[str, Any]] = []
+
+            candidate_pairs: List[Tuple[str, str]] = []
+            if len(uuid_candidates) >= 2:
+                candidate_pairs.append((uuid_candidates[0], uuid_candidates[1]))
+                if uuid_candidates[0] != uuid_candidates[1]:
+                    candidate_pairs.append((uuid_candidates[1], uuid_candidates[0]))
+            # Fallback to whatever we currently have (may be seed/login values).
+            candidate_pairs.append((report_page_uuid, report_uuid_value))
+
+            prepare_ok = False
+            for pair_idx, (pair_page_uuid, pair_uuid_value) in enumerate(candidate_pairs, start=1):
+                if (pair_page_uuid, pair_uuid_value) in tried_pairs:
                     continue
-                raise HTTPException(
-                    status_code=502,
-                    detail={
-                        "error": "auto_web_prepare_failed",
-                        "status_code": prep_resp.status_code,
-                        "content_type": (prep_resp.headers.get("content-type") or ""),
-                        "body_snippet": (prep_resp.text or "")[:1200],
-                    },
-                )
-            else:
+                tried_pairs.append((pair_page_uuid, pair_uuid_value))
+
+                prep_debug: Dict[str, Any] = {
+                    "pair_idx": pair_idx,
+                    "pageUUID": pair_page_uuid,
+                    "uuidValue": pair_uuid_value,
+                    "attempts": [],
+                }
+
+                report_page_uuid = pair_page_uuid
+                report_uuid_value = pair_uuid_value
+
+                for attempt in range(1, 9):
+                    prep_form = build_report_form(
+                        user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value
+                    )
+                    prep_form["prepareData"] = "true"
+                    prep_resp = await client.post(url, data=prep_form, headers=web_headers)
+                    if prep_resp.status_code == 200:
+                        prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
+                        report_page_uuid = (prep_ctx.get("pageUUID") or "").strip() or report_page_uuid
+                        report_uuid_value = (prep_ctx.get("uuidValue") or "").strip() or report_uuid_value
+                        prepare_ok = True
+                        break
+                    if prep_resp.status_code == 211:
+                        sleep_s = min(2.0, 0.2 * (2 ** (attempt - 1)))
+                        prep_debug["attempts"].append(
+                            {
+                                "attempt": attempt,
+                                "status_code": 211,
+                                "sleep_s": sleep_s,
+                                "payload_meta": {
+                                    "userId": prep_form.get("userId"),
+                                    "pageUUID": prep_form.get("pageUUID"),
+                                    "uuidValue": prep_form.get("uuidValue"),
+                                    "prepareData": prep_form.get("prepareData"),
+                                    "groupByDepartment": prep_form.get("groupByDepartment"),
+                                    "departments_count": len(dep_ids),
+                                },
+                            }
+                        )
+                        await asyncio.sleep(sleep_s)
+                        continue
+                    raise HTTPException(
+                        status_code=502,
+                        detail={
+                            "error": "auto_web_prepare_failed",
+                            "status_code": prep_resp.status_code,
+                            "content_type": (prep_resp.headers.get("content-type") or ""),
+                            "body_snippet": (prep_resp.text or "")[:1200],
+                        },
+                    )
+
+                pair_debugs.append(prep_debug)
+                if prepare_ok:
+                    break
+
+            if not prepare_ok:
                 ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                     "report_user_id": report_user_id,
                     "start_status": start_resp.status_code,
@@ -1538,7 +1578,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "seed_uuidValue": report_seed_uuid_value,
                     "start_ctx": start_ctx,
                     "start_snippet": (start_resp.text or "")[:400],
-                    "prepare_debug": prep_debug,
+                    "prepare_pairs_debug": pair_debugs,
                     "module_ctx": module_ctx,
                 }
                 raise HTTPException(
