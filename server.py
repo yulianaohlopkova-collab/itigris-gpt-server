@@ -33,6 +33,15 @@ app = FastAPI(
     openapi_url=None,
 )
 
+# Deployment/build markers (useful to confirm which commit Render is running).
+BUILD_COMMIT = (
+    os.getenv("RENDER_GIT_COMMIT")
+    or os.getenv("GIT_COMMIT")
+    or os.getenv("COMMIT_SHA")
+    or ""
+).strip()
+AUTO_REFRESH_IMPL_VERSION = "web_pipeline_v7_uuid_pair_fallback"
+
 
 APP_NAME = os.getenv("ITIGRIS_APP_NAME", "odl").strip() or "odl"
 REMOTE_API_KEY = (
@@ -1713,7 +1722,8 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
     now = int(time.time())
     _contactlenses_auto_fetch_state["last_attempt_unix"] = now
 
-    if not REMAINGOODS_AUTO_FETCH_URL_TEMPLATE and not REMAINGOODS_WEB_COOKIE:
+    login_mode_configured = bool(ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY)
+    if not REMAINGOODS_AUTO_FETCH_URL_TEMPLATE and not REMAINGOODS_WEB_COOKIE and not login_mode_configured:
         _contactlenses_auto_fetch_state["last_error"] = "auto_fetch_not_configured"
         _contactlenses_auto_fetch_state["last_error_at_unix"] = now
         return {"ok": False, "error": "auto_fetch_not_configured"}
@@ -1749,6 +1759,8 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
             "ok": False,
             "error": "auto_refresh_failed",
             "method_attempted": method_attempted,
+            "impl_version": AUTO_REFRESH_IMPL_VERSION,
+            "build_commit": BUILD_COMMIT or None,
             "debug": e.detail,
         }
     except Exception as exc:
@@ -1758,6 +1770,8 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
             "ok": False,
             "error": "parse_error_unknown",
             "method_attempted": method_attempted,
+            "impl_version": AUTO_REFRESH_IMPL_VERSION,
+            "build_commit": BUILD_COMMIT or None,
             "debug": {"type": type(exc).__name__, "message": str(exc)},
         }
 
@@ -1781,6 +1795,8 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "ok": True,
         "skipped": False,
         "method": method_used,
+        "impl_version": AUTO_REFRESH_IMPL_VERSION,
+        "build_commit": BUILD_COMMIT or None,
         "stored_at_unix": now,
         "expires_at_unix": expires,
         "filename": resolved_filename,
@@ -1928,6 +1944,8 @@ def healthz() -> Dict[str, Any]:
     return {
         "ok": True,
         "version": app.version,
+        "build_commit": BUILD_COMMIT or None,
+        "auto_refresh_impl_version": AUTO_REFRESH_IMPL_VERSION,
         "itigris_app": APP_NAME,
         "remote_api_key_configured": bool(REMOTE_API_KEY),
         "external_api_key_configured": bool(EXTERNAL_API_KEY),
@@ -2393,6 +2411,8 @@ async def contactlenses_remain_goods_report_auto_status(request: Request) -> Any
         return auth_err
     global_snap = get_global_snapshot()
     return {
+        "build_commit": BUILD_COMMIT or None,
+        "auto_refresh_impl_version": AUTO_REFRESH_IMPL_VERSION,
         "auto_fetch_configured": bool(REMAINGOODS_AUTO_FETCH_URL_TEMPLATE or REMAINGOODS_WEB_COOKIE or (ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY)),
         "auto_refresh_min_seconds": REMAINGOODS_AUTO_REFRESH_MIN_SECONDS,
         "auto_fetch_methods": {
