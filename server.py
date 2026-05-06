@@ -1147,6 +1147,11 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
         m = re.search(rf"{re.escape(name)}\\s*[:=]\\s*['\\\"]([^'\\\"]+)['\\\"]", src, flags=re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
+    def _find_anywhere(name: str) -> str:
+        # More permissive: pageUUID\\u003d<uuid>, pageUUID%3D<uuid>, pageUUID=<uuid>
+        m = re.search(rf"{re.escape(name)}(?:\\\\u003d|%3[Dd]|=)\\s*({uuid_re.pattern})", src, flags=re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
     uuid_re = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
     def _collect_uuids(limit: int = 50) -> List[str]:
@@ -1180,6 +1185,8 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
         or _find_query("pageUuid")
         or _find_js("pageUUID")
         or _find_js("pageUuid")
+        or _find_anywhere("pageUUID")
+        or _find_anywhere("pageUuid")
         or _find_keyed_uuid(["pageUUID", "pageUuid", "page_uuid"])
         or ""
     )
@@ -1190,6 +1197,8 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
         or _find_query("uuidvalue")
         or _find_js("uuidValue")
         or _find_js("uuidvalue")
+        or _find_anywhere("uuidValue")
+        or _find_anywhere("uuidvalue")
         or _find_keyed_uuid(["uuidValue", "uuidvalue", "uuid_value"])
         or ""
     )
@@ -1658,18 +1667,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             prep_resp: httpx.Response
             prep_ctx: Dict[str, str] = {}
 
-            # If startPage HTML doesn't expose named pageUUID/uuidValue, it may still contain UUIDs.
-            # Based on DevTools: pageUUID stays constant; uuidValue changes between prepare and final.
-            # So do NOT swap candidates as pairs. Use candidate[0] as pageUUID only if our pageUUID is empty,
-            # and candidate[1] as uuidValue if our uuidValue is empty.
-            candidates_raw = (start_ctx.get("_uuid_candidates") or "").strip()
-            uuid_candidates = [u.strip() for u in candidates_raw.split(",") if u.strip()]
-            # Confirmed by DevTools: for remainGoodsReport, pageUUID stays stable while uuidValue changes.
-            # The startPage HTML often contains two UUID-like values even if they are not labeled.
-            # In that case, treat candidate[0] as pageUUID and candidate[1] as uuidValue, overriding seed/login UUIDs.
-            if len(uuid_candidates) >= 2:
-                report_page_uuid = uuid_candidates[0]
-                report_uuid_value = uuid_candidates[1]
+            # Prefer labeled values from startPage response. If extractor can't find them, we'll time out
+            # and rely on report_debug.start_ctx._uuid_candidates to refine extraction patterns.
+            report_page_uuid = (start_ctx.get("pageUUID") or "").strip() or report_page_uuid
+            report_uuid_value = (start_ctx.get("uuidValue") or "").strip() or report_uuid_value
 
             prep_debug: Dict[str, Any] = {
                 "pageUUID": report_page_uuid,
