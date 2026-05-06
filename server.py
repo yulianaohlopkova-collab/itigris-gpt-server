@@ -1850,6 +1850,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "pageUUID_seed": start_payload_used["pageUUID"],
                     "uuidValue_seed": start_payload_used["uuidValue"],
                     "module_ctx": module_ctx,
+                    "login_debug": ctx.get("_debug"),
                     "module_overrides_present": bool(
                         ITIGRIS_REMAINGOODSREPORT_PAGE_UUID or ITIGRIS_REMAINGOODSREPORT_UUID_VALUE
                     ),
