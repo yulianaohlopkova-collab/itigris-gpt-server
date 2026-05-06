@@ -1563,15 +1563,34 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         )
                         await asyncio.sleep(sleep_s)
                         continue
-                    raise HTTPException(
-                        status_code=502,
-                        detail={
-                            "error": "auto_web_prepare_failed",
-                            "status_code": prep_resp.status_code,
-                            "content_type": (prep_resp.headers.get("content-type") or ""),
-                            "body_snippet": (prep_resp.text or "")[:1200],
-                        },
-                    )
+                cookie_names = sorted({c.name for c in client.cookies.jar})
+                ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
+                    "report_user_id": report_user_id,
+                    "start_status": start_resp.status_code,
+                    "pageUUID": report_page_uuid,
+                    "uuidValue": report_uuid_value,
+                    "seed_pageUUID": report_seed_page_uuid,
+                    "seed_uuidValue": report_seed_uuid_value,
+                    "start_ctx": start_ctx,
+                    "start_snippet": (start_resp.text or "")[:400],
+                    "module_ctx": module_ctx,
+                    "login_debug": ctx.get("_debug"),
+                    "cookie_names": cookie_names,
+                    "prepare_pair_idx": prep_debug.get("pair_idx"),
+                    "prepare_pair_pageUUID": prep_debug.get("pageUUID"),
+                    "prepare_pair_uuidValue": prep_debug.get("uuidValue"),
+                    "prepare_attempts": prep_debug.get("attempts"),
+                }
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_prepare_failed",
+                        "status_code": prep_resp.status_code,
+                        "content_type": (prep_resp.headers.get("content-type") or ""),
+                        "body_snippet": (prep_resp.text or "")[:1200],
+                        "report_debug": ctx.get("_report_ctx"),
+                    },
+                )
 
                 pair_debugs.append(prep_debug)
                 if prepare_ok:
