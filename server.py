@@ -1668,13 +1668,24 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             prep_ctx: Dict[str, str] = {}
 
             # Prefer labeled values from startPage response. If extractor can't find them, we'll time out
-            # and rely on report_debug.start_ctx._uuid_candidates to refine extraction patterns.
-            report_page_uuid = (start_ctx.get("pageUUID") or "").strip() or report_page_uuid
-            report_uuid_value = (start_ctx.get("uuidValue") or "").strip() or report_uuid_value
+            # and fall back to UUID candidates from startPage (validated by the prepare response).
+            labeled_page_uuid = (start_ctx.get("pageUUID") or "").strip()
+            labeled_uuid_value = (start_ctx.get("uuidValue") or "").strip()
+            if labeled_page_uuid:
+                report_page_uuid = labeled_page_uuid
+            if labeled_uuid_value:
+                report_uuid_value = labeled_uuid_value
+
+            candidates_raw = (start_ctx.get("_uuid_candidates") or "").strip()
+            uuid_candidates = [u.strip() for u in candidates_raw.split(",") if u.strip()]
+            candidate_page_uuid = uuid_candidates[0] if len(uuid_candidates) >= 1 else ""
+            candidate_uuid_value = uuid_candidates[1] if len(uuid_candidates) >= 2 else ""
 
             prep_debug: Dict[str, Any] = {
                 "pageUUID": report_page_uuid,
                 "uuidValue": report_uuid_value,
+                "candidate_pageUUID": candidate_page_uuid or None,
+                "candidate_uuidValue": candidate_uuid_value or None,
                 "attempts": [],
             }
 
@@ -1690,6 +1701,28 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     prepare_ok = True
                     break
                 if prep_resp.status_code == 211:
+                    # If we are stuck with seed/login UUIDs, try switching to startPage candidates once.
+                    if (
+                        attempt == 1
+                        and candidate_page_uuid
+                        and candidate_uuid_value
+                        and (report_page_uuid, report_uuid_value) != (candidate_page_uuid, candidate_uuid_value)
+                    ):
+                        # Try candidate context immediately.
+                        report_page_uuid = candidate_page_uuid
+                        report_uuid_value = candidate_uuid_value
+                        prep_debug["attempts"].append(
+                            {
+                                "attempt": attempt,
+                                "status_code": 211,
+                                "switch_to_candidates": True,
+                                "payload_meta": {
+                                    "pageUUID": report_page_uuid,
+                                    "uuidValue": report_uuid_value,
+                                },
+                            }
+                        )
+                        continue
                     sleep_s = min(3.0, 0.25 * (2 ** (attempt - 1)))
                     prep_debug["attempts"].append(
                         {
