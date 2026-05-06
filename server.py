@@ -1794,11 +1794,18 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "companyUUID": company_uuid,
         }
         html_ctx = _extract_optima_ctx_from_text(r3.text or "")
+        html_text = r3.text or ""
+        html_snippet = None
+        idx = html_text.find("updateMainPageData")
+        if idx != -1:
+            html_snippet = html_text[max(0, idx - 150) : min(len(html_text), idx + 450)]
         debug["steps"].append(
             {
                 "step": "startPageAccountant_extract",
                 "ctx_from_final_url": {k: (out.get(k) or None) for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]},
                 "ctx_from_html": {k: (html_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]},
+                "html_len": len(html_text),
+                "html_snippet": html_snippet,
             }
         )
         # HTML may carry a better uuidValue (used as seed for other report modules).
