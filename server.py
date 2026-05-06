@@ -1640,8 +1640,13 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         user_id = (base_ctx.get("userId") or ITIGRIS_WEB_USER_ID or "").strip()
         page_uuid = (base_ctx.get("pageUUID") or "").strip()
         uuid_value = (base_ctx.get("uuidValue") or "").strip()
+        debug: Dict[str, Any] = {
+            "input": {"userId": user_id or None, "pageUUID": page_uuid or None, "uuidValue": uuid_value or None},
+            "steps": [],
+        }
         if not (user_id and page_uuid and uuid_value):
-            return {}
+            debug["error"] = "missing_base_ctx"
+            return {"_debug": debug}  # type: ignore[return-value]
 
         def _ctx_from_url(u: str) -> Dict[str, str]:
             try:
@@ -1662,24 +1667,48 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         payload = {"userId": user_id, "pageUUID": page_uuid, "uuidValue": uuid_value, "companyUUID": company_uuid}
         r1 = await client.post(open1_url, data=payload, headers=web_headers, follow_redirects=False)
         loc1 = r1.headers.get("location") or r1.headers.get("Location") or ""
+        ctx1 = _ctx_from_url(loc1) if loc1 else {}
+        debug["steps"].append(
+            {
+                "step": "openMenuElement",
+                "status": r1.status_code,
+                "location": loc1[:500] if loc1 else None,
+                "ctx_from_location": {k: (ctx1.get(k) or None) for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]},
+            }
+        )
         if r1.status_code not in {302, 303} or not loc1:
-            return {}
+            debug["error"] = "openMenuElement_no_redirect"
+            return {"_debug": debug}  # type: ignore[return-value]
 
         # Sometimes the new page context is already present in redirect URL.
-        ctx1 = _ctx_from_url(loc1)
-
         # 2) openMenuElement2 (GET) -> 302
         r2 = await _follow_location(client, loc1)
         loc2 = r2.headers.get("location") or r2.headers.get("Location") or ""
+        ctx2 = _ctx_from_url(loc2) if loc2 else {}
+        debug["steps"].append(
+            {
+                "step": "openMenuElement2",
+                "status": r2.status_code,
+                "location": loc2[:500] if loc2 else None,
+                "ctx_from_location": {k: (ctx2.get(k) or None) for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]},
+            }
+        )
         if r2.status_code not in {302, 303} or not loc2:
-            return {}
-
-        ctx2 = _ctx_from_url(loc2)
+            debug["error"] = "openMenuElement2_no_redirect"
+            return {"_debug": debug}  # type: ignore[return-value]
 
         # 3) startPageAccountant (GET) -> 200 HTML
         r3 = await _follow_location(client, loc2)
+        debug["steps"].append(
+            {
+                "step": "startPageAccountant",
+                "status": r3.status_code,
+                "final_url": str(r3.request.url)[:500] if getattr(r3, "request", None) else None,
+            }
+        )
         if r3.status_code != 200:
-            return {}
+            debug["error"] = "startPageAccountant_not_200"
+            return {"_debug": debug}  # type: ignore[return-value]
 
         # Prefer context from the final URL query (closest to what browser uses), fallback to HTML.
         final_url = str(r3.request.url)
@@ -1692,9 +1721,17 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "companyUUID": company_uuid,
         }
         html_ctx = _extract_optima_ctx_from_text(r3.text or "")
+        debug["steps"].append(
+            {
+                "step": "startPageAccountant_extract",
+                "ctx_from_final_url": {k: (out.get(k) or None) for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]},
+                "ctx_from_html": {k: (html_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]},
+            }
+        )
         if html_ctx.get("pageUUID") and html_ctx.get("uuidValue"):
             out["pageUUID"] = html_ctx.get("pageUUID") or out["pageUUID"]
             out["uuidValue"] = html_ctx.get("uuidValue") or out["uuidValue"]
+        out["_debug"] = debug  # type: ignore[typeddict-item]
         return out
 
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
