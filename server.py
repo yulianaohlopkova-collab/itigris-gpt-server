@@ -1226,6 +1226,12 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
         if m:
             out["pageUUID"] = m.group(1)
 
+    # Another common variant: updateMainPageDataMin("<pageUUID>")
+    if not out["pageUUID"]:
+        m = _safe_search(rf"updateMainPageDataMin\\?\\(['\\\"]({uuid_re.pattern})['\\\"]\\)")
+        if m:
+            out["pageUUID"] = m.group(1)
+
     # remainGoodsReport: startPage HTML often carries the *next* uuidValue (used for reportPage/prepareData)
     # inside updateMainPageData(..., "<uuidValue>", ""), without an explicit "uuidValue=" label.
     if not out["uuidValue"]:
@@ -1594,9 +1600,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             try:
                 main_r = await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
                 main_ctx = _extract_optima_ctx_from_text(main_r.text or "")
-                if main_ctx.get("pageUUID") and main_ctx.get("uuidValue"):
-                    # Keep userId from redirect, but refresh pageUUID/uuidValue from the main page.
+                # Keep userId from redirect, but refresh pageUUID/uuidValue from the main page when present.
+                if main_ctx.get("pageUUID"):
                     ctx["pageUUID"] = main_ctx.get("pageUUID") or ctx["pageUUID"]
+                if main_ctx.get("uuidValue"):
                     ctx["uuidValue"] = main_ctx.get("uuidValue") or ctx["uuidValue"]
             except Exception:
                 pass
