@@ -1236,6 +1236,13 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
         if m:
             out["pageUUID"] = m.group(1)
 
+    # Another common pattern: updateMainPageData(..., "<uuidValue>", "");
+    # This is frequently the "current page" uuidValue rather than pageUUID.
+    if not out["uuidValue"]:
+        m = _safe_search(rf"updateMainPageData\\?\\([^)]*?['\\\"]({uuid_re.pattern})['\\\"]\\s*,\\s*['\\\"]\\s*['\\\"]\\s*\\)")
+        if m:
+            out["uuidValue"] = m.group(1)
+
     # remainGoodsReport: startPage HTML often carries the *next* uuidValue (used for reportPage/prepareData)
     # inside updateMainPageData(..., "<uuidValue>", ""), without an explicit "uuidValue=" label.
     if not out["uuidValue"]:
@@ -1794,8 +1801,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "ctx_from_html": {k: (html_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]},
             }
         )
-        if html_ctx.get("pageUUID") and html_ctx.get("uuidValue"):
+        # HTML may carry a better uuidValue (used as seed for other report modules).
+        if html_ctx.get("pageUUID"):
             out["pageUUID"] = html_ctx.get("pageUUID") or out["pageUUID"]
+        if html_ctx.get("uuidValue"):
             out["uuidValue"] = html_ctx.get("uuidValue") or out["uuidValue"]
         out["_debug"] = debug  # type: ignore[typeddict-item]
         return out
