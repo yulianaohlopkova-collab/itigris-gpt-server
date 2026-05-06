@@ -1174,6 +1174,13 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
 
     out: Dict[str, str] = {}
 
+    def _safe_search(pattern: str) -> Optional[re.Match]:
+        try:
+            return re.search(pattern, src, flags=re.IGNORECASE)
+        except re.error:
+            # Never fail the whole request due to a heuristic extractor bug.
+            return None
+
     # userId is numeric, not uuid.
     out["userId"] = _find_hidden("userId") or _find_query("userId") or _find_js("userId") or ""
 
@@ -1214,14 +1221,15 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
 
     # Heuristic: some pages carry page context in JS function calls, e.g. updateMainPageData(..., "<uuid>", ...).
     if not out["pageUUID"]:
-        m = re.search(rf"updateMainPageData\\([^\\)]*?['\\\"]({uuid_re.pattern})['\\\"]", src, flags=re.IGNORECASE)
+        # Match both "updateMainPageData(" and "updateMainPageData\\(" (some pages escape "(" as "\\(" in JS strings).
+        m = _safe_search(rf"updateMainPageData\\?\\([^)]*?['\\\"]({uuid_re.pattern})['\\\"]")
         if m:
             out["pageUUID"] = m.group(1)
 
     # remainGoodsReport: startPage HTML often carries the *next* uuidValue (used for reportPage/prepareData)
     # inside updateMainPageData(..., "<uuidValue>", ""), without an explicit "uuidValue=" label.
     if not out["uuidValue"]:
-        m = re.search(rf"updateMainPageData\\([^\\)]*?['\\\"]({uuid_re.pattern})['\\\"]\\s*,\\s*['\\\"]\\s*['\\\"]\\s*\\)", src, flags=re.IGNORECASE)
+        m = _safe_search(rf"updateMainPageData\\?\\([^)]*?['\\\"]({uuid_re.pattern})['\\\"]\\s*,\\s*['\\\"]\\s*['\\\"]\\s*\\)")
         if m:
             out["uuidValue"] = m.group(1)
 
