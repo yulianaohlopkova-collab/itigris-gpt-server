@@ -1600,11 +1600,39 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             try:
                 main_r = await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
                 main_ctx = _extract_optima_ctx_from_text(main_r.text or "")
+                # Capture extractor diagnostics for debugging (snippets are limited).
+                main_text = main_r.text or ""
+                # best-effort: find nearby snippet for updateMainPageDataMin/updateMainPageData
+                snippet = ""
+                for pat in ["updateMainPageDataMin", "updateMainPageData"]:
+                    idx = main_text.find(pat)
+                    if idx != -1:
+                        start = max(0, idx - 120)
+                        end = min(len(main_text), idx + 240)
+                        snippet = main_text[start:end]
+                        break
+                # Keep userId from redirect, but refresh pageUUID/uuidValue from the main page when present.
                 # Keep userId from redirect, but refresh pageUUID/uuidValue from the main page when present.
                 if main_ctx.get("pageUUID"):
                     ctx["pageUUID"] = main_ctx.get("pageUUID") or ctx["pageUUID"]
                 if main_ctx.get("uuidValue"):
                     ctx["uuidValue"] = main_ctx.get("uuidValue") or ctx["uuidValue"]
+                # Attach debug (do not include full HTML).
+                try:
+                    dbg = ctx.get("_debug") or {}
+                    dbg["main_page_probe"] = {
+                        "status": main_r.status_code,
+                        "len": len(main_text),
+                        "extracted": {
+                            "pageUUID": (main_ctx.get("pageUUID") or None),
+                            "uuidValue": (main_ctx.get("uuidValue") or None),
+                            "userId": (main_ctx.get("userId") or None),
+                        },
+                        "snippet": snippet or None,
+                    }
+                    ctx["_debug"] = dbg  # type: ignore[typeddict-item]
+                except Exception:
+                    pass
             except Exception:
                 pass
 
