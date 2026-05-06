@@ -1704,7 +1704,14 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # 1) openMenuElement (POST) -> 302
         open1_url = f"https://optima.itigris.ru/{APP_NAME}/menu/openMenuElement?menuItem=accountantReports"
         payload = {"userId": user_id, "pageUUID": page_uuid, "uuidValue": uuid_value, "companyUUID": company_uuid}
-        r1 = await client.post(open1_url, data=payload, headers=web_headers, follow_redirects=False)
+        menu_headers = {
+            # Closer to browser navigation: do NOT force XHR here; Optima may return different redirects.
+            "User-Agent": ua,
+            "Accept": "text/html, */*; q=0.01",
+            "Referer": f"https://optima.itigris.ru/{APP_NAME}",
+            "Origin": "https://optima.itigris.ru",
+        }
+        r1 = await client.post(open1_url, data=payload, headers=menu_headers, follow_redirects=False)
         loc1 = r1.headers.get("location") or r1.headers.get("Location") or ""
         ctx1 = _ctx_from_url(loc1) if loc1 else {}
         debug["steps"].append(
@@ -1721,7 +1728,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
         # Sometimes the new page context is already present in redirect URL.
         # 2) openMenuElement2 (GET) -> 302
-        r2 = await _follow_location(client, loc1)
+        r2 = await client.get(
+            urljoin(f"https://optima.itigris.ru/{APP_NAME}/", loc1.lstrip("/")),
+            headers=menu_headers,
+            follow_redirects=False,
+        )
         loc2 = r2.headers.get("location") or r2.headers.get("Location") or ""
         ctx2 = _ctx_from_url(loc2) if loc2 else {}
         debug["steps"].append(
@@ -1737,7 +1748,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             return {"_debug": debug}  # type: ignore[return-value]
 
         # 3) startPageAccountant (GET) -> 200 HTML
-        r3 = await _follow_location(client, loc2)
+        r3 = await client.get(
+            urljoin(f"https://optima.itigris.ru/{APP_NAME}/", loc2.lstrip("/")),
+            headers=menu_headers,
+            follow_redirects=False,
+        )
         debug["steps"].append(
             {
                 "step": "startPageAccountant",
