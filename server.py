@@ -1638,12 +1638,16 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
             # include debug meta for downstream errors
             cookie_names = sorted({c.name for c in client.cookies.jar})
-            ctx["_debug"] = {  # type: ignore[typeddict-item]
-                "login_status": login_status,
-                "login_location": location,
-                "userStart_ok": user_start_ok,
-                "cookie_names": cookie_names,
-            }
+            dbg = ctx.get("_debug") or {}
+            dbg.update(
+                {
+                    "login_status": login_status,
+                    "login_location": location,
+                    "userStart_ok": user_start_ok,
+                    "cookie_names": cookie_names,
+                }
+            )
+            ctx["_debug"] = dbg  # type: ignore[typeddict-item]
             return ctx
 
         # No redirect location: this is unexpected at this point.
