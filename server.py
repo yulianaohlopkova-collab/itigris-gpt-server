@@ -1125,22 +1125,78 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
     src = text or ""
 
     def _find_hidden(name: str) -> str:
-        m = re.search(rf'name=\"{re.escape(name)}\"\\s+value=\"([^\"]+)\"', src)
+        m = re.search(rf'name=\"{re.escape(name)}\"\\s+value=\"([^\"]+)\"', src, flags=re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
     def _find_query(name: str) -> str:
         # Match ...name=VALUE... in text blobs (hrefs/scripts).
-        m = re.search(rf"(?:\\?|&){re.escape(name)}=([^&\\s\\\"'>]+)", src)
+        m = re.search(rf"(?:\\?|&){re.escape(name)}=([^&\\s\\\"'>]+)", src, flags=re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
     def _find_js(name: str) -> str:
         # Match name:'value' or name=\"value\"
-        m = re.search(rf"{re.escape(name)}\\s*[:=]\\s*['\\\"]([^'\\\"]+)['\\\"]", src)
+        m = re.search(rf"{re.escape(name)}\\s*[:=]\\s*['\\\"]([^'\\\"]+)['\\\"]", src, flags=re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
+    uuid_re = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+    def _collect_uuids(limit: int = 50) -> List[str]:
+        seen: List[str] = []
+        for m in uuid_re.finditer(src):
+            u = m.group(0)
+            if u not in seen:
+                seen.append(u)
+            if len(seen) >= limit:
+                break
+        return seen
+
+    def _find_keyed_uuid(keys: List[str]) -> str:
+        # Look for "<key> ... <uuid>" patterns in HTML/JS.
+        for k in keys:
+            m = re.search(rf"{re.escape(k)}[^0-9a-fA-F]{{0,40}}({uuid_re.pattern})", src, flags=re.IGNORECASE)
+            if m:
+                return m.group(1)
+        return ""
+
     out: Dict[str, str] = {}
-    for key in ["userId", "pageUUID", "uuidValue", "companyUUID"]:
-        out[key] = _find_hidden(key) or _find_query(key) or _find_js(key) or ""
+
+    # userId is numeric, not uuid.
+    out["userId"] = _find_hidden("userId") or _find_query("userId") or _find_js("userId") or ""
+
+    # pageUUID / uuidValue may appear with different casing.
+    out["pageUUID"] = (
+        _find_hidden("pageUUID")
+        or _find_hidden("pageUuid")
+        or _find_query("pageUUID")
+        or _find_query("pageUuid")
+        or _find_js("pageUUID")
+        or _find_js("pageUuid")
+        or _find_keyed_uuid(["pageUUID", "pageUuid", "page_uuid"])
+        or ""
+    )
+    out["uuidValue"] = (
+        _find_hidden("uuidValue")
+        or _find_hidden("uuidvalue")
+        or _find_query("uuidValue")
+        or _find_query("uuidvalue")
+        or _find_js("uuidValue")
+        or _find_js("uuidvalue")
+        or _find_keyed_uuid(["uuidValue", "uuidvalue", "uuid_value"])
+        or ""
+    )
+    out["companyUUID"] = (
+        _find_hidden("companyUUID")
+        or _find_hidden("companyUuid")
+        or _find_query("companyUUID")
+        or _find_query("companyUuid")
+        or _find_js("companyUUID")
+        or _find_js("companyUuid")
+        or ""
+    )
+
+    # Attach uuid candidates for debugging when extraction fails.
+    if not out["pageUUID"] or not out["uuidValue"]:
+        out["_uuid_candidates"] = ",".join(_collect_uuids(25))
     return out
 
 
@@ -1428,8 +1484,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     },
                 )
             start_ctx = _extract_optima_ctx_from_text(start_resp.text or "")
-            report_page_uuid = start_ctx.get("pageUUID") or start_payload_used["pageUUID"] or ""
-            report_uuid_value = start_ctx.get("uuidValue") or start_payload_used["uuidValue"] or ""
+            report_page_uuid = (start_ctx.get("pageUUID") or "").strip() or start_payload_used["pageUUID"] or ""
+            report_uuid_value = (start_ctx.get("uuidValue") or "").strip() or start_payload_used["uuidValue"] or ""
 
             # 2) reportPage prepareData=true (usually updates uuidValue)
             prep_resp: httpx.Response
