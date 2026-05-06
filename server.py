@@ -1504,10 +1504,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             extracted_uuid_value = extracted.get("uuidValue") or ""
             extracted_user_id = extracted.get("userId") or ""
 
-        # If we can't extract from HTML, allow explicit env overrides.
-        extracted_page_uuid = extracted_page_uuid or ITIGRIS_WEB_PAGE_UUID
-        extracted_uuid_value = extracted_uuid_value or ITIGRIS_WEB_UUID_VALUE
-        extracted_user_id = extracted_user_id or ITIGRIS_WEB_USER_ID
+        # IMPORTANT: do not force pageUUID/uuidValue/userId from env into the login request.
+        # In practice Optima may generate a different (and working) page context when these are empty,
+        # as seen in browser HAR captures. We still use ITIGRIS_WEB_USER_ID later for report calls.
+        extracted_page_uuid = extracted_page_uuid or ""
+        extracted_uuid_value = extracted_uuid_value or ""
+        extracted_user_id = extracted_user_id or ""
 
         login_form: Dict[str, Any] = {
             "loginAction": "true",
