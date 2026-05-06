@@ -1237,9 +1237,10 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
             out["pageUUID"] = m.group(1)
 
     # Another common pattern: updateMainPageData(..., "<uuidValue>", "");
-    # This is frequently the "current page" uuidValue rather than pageUUID.
+    # Here the uuidValue is typically the last UUID argument in the call.
     if not out["uuidValue"]:
-        m = _safe_search(rf"updateMainPageData\\?\\([^)]*?['\\\"]({uuid_re.pattern})['\\\"]\\s*,\\s*['\\\"]\\s*['\\\"]\\s*\\)")
+        # Capture the *last* UUID inside updateMainPageData(...) before the trailing ,"" / ''.
+        m = _safe_search(rf"updateMainPageData\\?\\(.*?({uuid_re.pattern})\\s*,\\s*['\\\"]\\s*['\\\"]\\s*\\)\\s*;")
         if m:
             out["uuidValue"] = m.group(1)
 
