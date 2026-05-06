@@ -1212,6 +1212,19 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
         or ""
     )
 
+    # Heuristic: some pages carry page context in JS function calls, e.g. updateMainPageData(..., "<uuid>", ...).
+    if not out["pageUUID"]:
+        m = re.search(rf"updateMainPageData\\([^\\)]*?['\\\"]({uuid_re.pattern})['\\\"]", src, flags=re.IGNORECASE)
+        if m:
+            out["pageUUID"] = m.group(1)
+
+    # remainGoodsReport: startPage HTML often carries the *next* uuidValue (used for reportPage/prepareData)
+    # inside updateMainPageData(..., "<uuidValue>", ""), without an explicit "uuidValue=" label.
+    if not out["uuidValue"]:
+        m = re.search(rf"updateMainPageData\\([^\\)]*?['\\\"]({uuid_re.pattern})['\\\"]\\s*,\\s*['\\\"]\\s*['\\\"]\\s*\\)", src, flags=re.IGNORECASE)
+        if m:
+            out["uuidValue"] = m.group(1)
+
     # Attach uuid candidates for debugging when extraction fails.
     if not out["pageUUID"] or not out["uuidValue"]:
         out["_uuid_candidates"] = ",".join(_collect_uuids(25))
@@ -1568,6 +1581,18 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             except Exception:
                 user_start_ok = False
 
+            # After login/userStart, Optima often issues the "current page context" (pageUUID/uuidValue)
+            # on the main app page. remainGoodsReport/startPage expects those values in the POST payload.
+            try:
+                main_r = await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
+                main_ctx = _extract_optima_ctx_from_text(main_r.text or "")
+                if main_ctx.get("pageUUID") and main_ctx.get("uuidValue"):
+                    # Keep userId from redirect, but refresh pageUUID/uuidValue from the main page.
+                    ctx["pageUUID"] = main_ctx.get("pageUUID") or ctx["pageUUID"]
+                    ctx["uuidValue"] = main_ctx.get("uuidValue") or ctx["uuidValue"]
+            except Exception:
+                pass
+
             # include debug meta for downstream errors
             cookie_names = sorted({c.name for c in client.cookies.jar})
             ctx["_debug"] = {  # type: ignore[typeddict-item]
@@ -1632,13 +1657,23 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 }
                 return await client.post(start_url, data=payload, headers=web_headers)
 
-            # Some Optima setups allow startPage without seed pageUUID/uuidValue (server generates fresh ones).
-            # Try empty seed first, then fall back.
-            start_resp = await _post_start_page("", "")
-            start_payload_used = {"pageUUID": "", "uuidValue": ""}
-            if start_resp.status_code != 200:
-                start_resp = await _post_start_page(report_seed_page_uuid, report_seed_uuid_value)
-                start_payload_used = {"pageUUID": report_seed_page_uuid, "uuidValue": report_seed_uuid_value}
+            # startPage expects "current app" pageUUID/uuidValue (not the remainGoodsReport ones).
+            # Prefer module_ctx overrides, then login/main ctx, then explicit env seeds.
+            preferred_seed_page_uuid = (
+                (module_ctx.get("pageUUID") or "").strip()
+                or (ctx.get("pageUUID") or "").strip()
+                or report_seed_page_uuid
+                or ""
+            )
+            preferred_seed_uuid_value = (
+                (module_ctx.get("uuidValue") or "").strip()
+                or (ctx.get("uuidValue") or "").strip()
+                or report_seed_uuid_value
+                or ""
+            )
+
+            start_resp = await _post_start_page(preferred_seed_page_uuid, preferred_seed_uuid_value)
+            start_payload_used = {"pageUUID": preferred_seed_page_uuid, "uuidValue": preferred_seed_uuid_value}
             if start_resp.status_code != 200:
                 ctx["_report_ctx"] = {  # type: ignore[typeddict-item]
                     "report_user_id": report_user_id,
@@ -1799,6 +1834,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 if final_resp.status_code == 200:
                     break
                 if final_resp.status_code == 211:
+                    # In practice Optima sometimes expects a *fresh* uuidValue for the final request
+                    # even though prepareData=true succeeded (browser often sends a new one).
+                    # We don't always have a reliable extractor for it, so we generate a new UUID and retry.
+                    report_uuid_value = str(uuid.uuid4())
                     await asyncio.sleep(min(2.0, 0.2 * (2 ** (attempt - 1))))
                     continue
                 break
