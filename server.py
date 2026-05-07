@@ -1012,7 +1012,7 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
 
     required_keys = {"qty_packs", "qty_units", "remaining_in_pack", "in_pack", "value"}
     tables = soup.find_all("table")
-    best: Optional[Tuple[List[str], Any]] = None
+    matched_tables: List[Tuple[List[str], Any]] = []
     debug_tables: List[Dict[str, Any]] = []
     for table in tables:
         # Find first row that looks like header.
@@ -1047,10 +1047,10 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
             if candidates:
                 debug_tables.append({"candidates": candidates[:5]})
             continue
-        best = (header_cells, table)
-        break
+        matched_tables.append((header_cells, table))
+        continue
 
-    if not best:
+    if not matched_tables:
         raise HTTPException(
             status_code=400,
             detail={
@@ -1059,18 +1059,6 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
                 "debug_tables": debug_tables[:3],
             },
         )
-
-    header_cells, table = best
-    headers = [normalize_header(h) for h in header_cells]
-    idx = {
-        "department": find_col_index(headers, REMAINGOODS_HEADERS_NORM["department"]),
-        "qty_packs": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_packs"]),
-        "qty_units": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_units"]),
-        "remaining_in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["remaining_in_pack"]),
-        "in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["in_pack"]),
-        "value": find_col_index(headers, REMAINGOODS_HEADERS_NORM["value"]),
-        "unit_price": find_col_index(headers, REMAINGOODS_HEADERS_NORM["unit_price"]),
-    }
 
     def cell_text(c: Any) -> str:
         return (c.get_text(" ", strip=True) if c else "").strip()
@@ -1093,46 +1081,57 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
             return 0.0
 
     rows_out: List[Dict[str, Any]] = []
-    current_dep: str = ""
-    for tr in table.find_all("tr"):
-        cells = tr.find_all(["td", "th"])
-        if not cells:
-            continue
-        texts = [cell_text(c) for c in cells]
-        # skip obvious header-like rows
-        if any(normalize_header(t) == headers[0] for t in texts[:1]) and len(texts) == len(headers):
-            continue
-        if len(texts) < len(headers):
-            continue
-        dep = texts[idx["department"]] if idx["department"] is not None else ""
-        qty_packs = parse_num(texts[idx["qty_packs"]]) if idx["qty_packs"] is not None else 0.0
-        qty_units = parse_num(texts[idx["qty_units"]]) if idx["qty_units"] is not None else 0.0
-        remaining_in_pack = parse_num(texts[idx["remaining_in_pack"]]) if idx["remaining_in_pack"] is not None else 0.0
-        in_pack = parse_num(texts[idx["in_pack"]]) if idx["in_pack"] is not None else 0.0
-        value = parse_num(texts[idx["value"]]) if idx["value"] is not None else 0.0
-        unit_price = parse_num(texts[idx["unit_price"]]) if idx["unit_price"] is not None else 0.0
+    for header_cells, table in matched_tables:
+        headers = [normalize_header(h) for h in header_cells]
+        idx = {
+            "department": find_col_index(headers, REMAINGOODS_HEADERS_NORM["department"]),
+            "qty_packs": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_packs"]),
+            "qty_units": find_col_index(headers, REMAINGOODS_HEADERS_NORM["qty_units"]),
+            "remaining_in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["remaining_in_pack"]),
+            "in_pack": find_col_index(headers, REMAINGOODS_HEADERS_NORM["in_pack"]),
+            "value": find_col_index(headers, REMAINGOODS_HEADERS_NORM["value"]),
+            "unit_price": find_col_index(headers, REMAINGOODS_HEADERS_NORM["unit_price"]),
+        }
+        current_dep: str = ""
+        for tr in table.find_all("tr"):
+            cells = tr.find_all(["td", "th"])
+            if not cells:
+                continue
+            texts = [cell_text(c) for c in cells]
+            # skip obvious header-like rows
+            if any(normalize_header(t) == headers[0] for t in texts[:1]) and len(texts) == len(headers):
+                continue
+            if len(texts) < len(headers):
+                continue
+            dep = texts[idx["department"]] if idx["department"] is not None else ""
+            qty_packs = parse_num(texts[idx["qty_packs"]]) if idx["qty_packs"] is not None else 0.0
+            qty_units = parse_num(texts[idx["qty_units"]]) if idx["qty_units"] is not None else 0.0
+            remaining_in_pack = parse_num(texts[idx["remaining_in_pack"]]) if idx["remaining_in_pack"] is not None else 0.0
+            in_pack = parse_num(texts[idx["in_pack"]]) if idx["in_pack"] is not None else 0.0
+            value = parse_num(texts[idx["value"]]) if idx["value"] is not None else 0.0
+            unit_price = parse_num(texts[idx["unit_price"]]) if idx["unit_price"] is not None else 0.0
 
-        # Carry-forward department name for grouped reports: detail rows may omit department cell.
-        dep_norm = normalize_header(dep)
-        if dep and dep_norm not in {"итого", "всего", "итог", "total"}:
-            current_dep = dep.strip()
-        if not dep and current_dep:
-            dep = current_dep
+            # Carry-forward department name for grouped reports: detail rows may omit department cell.
+            dep_norm = normalize_header(dep)
+            if dep and dep_norm not in {"итого", "всего", "итог", "total"}:
+                current_dep = dep.strip()
+            if not dep and current_dep:
+                dep = current_dep
 
-        if not dep and qty_packs == 0 and qty_units == 0 and value == 0:
-            continue
+            if not dep and qty_packs == 0 and qty_units == 0 and value == 0:
+                continue
 
-        rows_out.append(
-            {
-                "department": dep,
-                "qty_packs": qty_packs,
-                "qty_units": qty_units,
-                "remaining_in_pack": remaining_in_pack,
-                "in_pack": in_pack,
-                "value": value,
-                "unit_price": unit_price,
-            }
-        )
+            rows_out.append(
+                {
+                    "department": dep,
+                    "qty_packs": qty_packs,
+                    "qty_units": qty_units,
+                    "remaining_in_pack": remaining_in_pack,
+                    "in_pack": in_pack,
+                    "value": value,
+                    "unit_price": unit_price,
+                }
+            )
     if not rows_out:
         raise HTTPException(status_code=400, detail="remainGoodsReport_no_rows_detected")
     return rows_out
