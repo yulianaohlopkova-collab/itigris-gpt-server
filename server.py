@@ -1636,11 +1636,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
     headers = {"X-Requested-With": "XMLHttpRequest"}
     # Match browser-ish headers for XHR.
     base_url = f"https://optima.itigris.ru/{APP_NAME}"
+    # Match HAR as closely as possible. Optima is sensitive to XHR headers.
     web_headers = {
         "X-Requested-With": "XMLHttpRequest",
         "User-Agent": ua,
-        "Accept": "text/html, */*; q=0.01",
-        "Referer": f"{base_url}/remainGoodsReport",
+        # Accept differs between prepare and final; set per request.
+        "Referer": f"{base_url}",
         "Origin": "https://optima.itigris.ru",
     }
 
@@ -1659,6 +1660,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             dept_vals = [str(dep_field)]
 
         encoded = urlencode(form, doseq=True)
+        encoded_pairs = encoded.split("&")
         # samples of the actual encoded department pairs
         pairs = [p for p in encoded.split("&") if p.startswith("department=")]
         dbg = {
@@ -1671,6 +1673,13 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "department_pairs_last": pairs[-5:] if len(pairs) > 5 else [],
             "encoded_len": len(encoded),
             "content_type": "application/x-www-form-urlencoded; charset=UTF-8",
+            # Exact display strings matter for some Optima selects.
+            "department_input0": form.get("department_input0"),
+            "groupByDepartment_input0": form.get("groupByDepartment_input0"),
+            "reportType_input0": form.get("reportType_input0"),
+            "priceType_input0": form.get("priceType_input0"),
+            # Field order sometimes matters with legacy backends.
+            "encoded_pairs_prefix": encoded_pairs[:60],
             # Useful when comparing prepare vs final.
             "payload_meta": {
                 "userId": form.get("userId"),
@@ -1688,6 +1697,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Ensure multi-select fields (e.g. department) are encoded as repeated keys.
         encoded, _dbg = _encode_form_with_debug(form, phase="final")
         req_headers = dict(web_headers)
+        # HAR (final): text/html, */*; q=0.01
+        req_headers["Accept"] = "text/html, */*; q=0.01"
         req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
         return await client.post(url, content=encoded, headers=req_headers)
 
@@ -2167,6 +2178,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 prep_form["prepareData"] = "true"
                 prep_encoded, prep_form_dbg = _encode_form_with_debug(prep_form, phase="prepare")
                 prep_headers = dict(web_headers)
+                # HAR (prepare): */*
+                prep_headers["Accept"] = "*/*"
                 prep_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
                 prep_resp = await client.post(url, content=prep_encoded, headers=prep_headers)
                 if prep_resp.status_code == 200:
