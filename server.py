@@ -1477,7 +1477,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         "priceFrom": "",
         "priceTo": "",
         # grouping
-        "groupByDepartment_input0": "",
+        # Optima uses *_input0 as display labels for jqTransSelect; HAR includes this.
+        "groupByDepartment_input0": "По департаменту и параметрам",
         "groupByDepartment": "true",
         # report type / price type
         "reportType_input0": REMAINGOODS_WEB_REPORT_TYPE,
