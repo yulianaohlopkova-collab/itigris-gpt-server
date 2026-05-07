@@ -108,6 +108,25 @@ DEPARTMENTS: Dict[str, int] = {
     "Офис": 1000000003,
 }
 
+# Display names as seen in Optima UI select options (best-effort).
+_DEPARTMENT_ID_TO_DISPLAY_NAME: Dict[int, str] = {
+    1000000021: "Ленина, 7",
+    1000000020: "Склад. Мобильный салон",
+    1000000019: "Мобильный салон",
+    1000000018: "Интернет-магазин Якутск",
+    1000000017: "Склад ИП БРАК",  # best-effort; varies by install
+    1000000016: "ТЦ Айсберг",
+    1000000012: "ТЦ Качели",
+    1000000011: "Улуруу Молл",
+    1000000009: "Лермонтова, 49",
+    1000000008: "Пояркова, 5",
+    1000000007: "Склад ИП",
+    1000000006: "Цех",
+    1000000005: "Склад ООО",
+    1000000004: "СахаЭкспоЦентр",
+    1000000003: "Офис",
+}
+
 DEPARTMENT_ALIASES: Dict[str, int] = {
     "качели": 1000000012,
     "в качелях": 1000000012,
@@ -1408,10 +1427,14 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Use dict + list values instead.
         # NOTE: Optima's report endpoints may expect the full form payload (even if fields are empty).
         # We mirror the browser payload shape, defaulting optional filters to empty strings.
+        dep_display_names = [
+            _DEPARTMENT_ID_TO_DISPLAY_NAME.get(int(d), str(d)) for d in dep_ids
+        ]
+        dep_input0 = ", ".join(dep_display_names)
         return {
         "date": date_ddmmyyyy,
         # department selection
-        "department_input0": "",
+        "department_input0": dep_input0,
         "department": dep_ids,
         # supply/supplier/price ranges
         "supplyDateFrom": "",
