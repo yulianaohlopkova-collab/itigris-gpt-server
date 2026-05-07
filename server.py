@@ -372,6 +372,8 @@ _contactlenses_report_snapshots: Dict[int, Dict[str, Any]] = {}
 _contactlenses_report_global_snapshot: Optional[Dict[str, Any]] = None
 # Debug for the most recent remainGoodsReport HTML parse (auto-web path).
 _last_remain_goods_html_parse_debug: Optional[Dict[str, Any]] = None
+# Debug for the most recent remainGoodsReport web form payload (auto-web path).
+_last_remain_goods_web_form_debug: Optional[Dict[str, Any]] = None
 _contactlenses_auto_fetch_state: Dict[str, Any] = {
     "last_attempt_unix": None,
     "last_success_unix": None,
@@ -1587,10 +1589,40 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         "Origin": "https://optima.itigris.ru",
     }
 
+    def _encode_form_with_debug(form: Dict[str, Any], phase: str) -> Tuple[str, Dict[str, Any]]:
+        """
+        Encode form as x-www-form-urlencoded with repeated keys for list values (doseq=True).
+        Also capture debug metadata to compare with browser HAR.
+        """
+        global _last_remain_goods_web_form_debug
+        dept_vals: List[str] = []
+        dep_field = form.get("department")
+        if isinstance(dep_field, list):
+            dept_vals = [str(x) for x in dep_field]
+        elif dep_field is not None:
+            dept_vals = [str(dep_field)]
+
+        encoded = urlencode(form, doseq=True)
+        # samples of the actual encoded department pairs
+        pairs = [p for p in encoded.split("&") if p.startswith("department=")]
+        dbg = {
+            "phase": phase,
+            "departments_count": len(dept_vals),
+            "departments_values_first": dept_vals[:8],
+            "departments_values_last": dept_vals[-8:] if len(dept_vals) > 8 else [],
+            "department_pairs_count": len(pairs),
+            "department_pairs_first": pairs[:5],
+            "department_pairs_last": pairs[-5:] if len(pairs) > 5 else [],
+            "encoded_len": len(encoded),
+            "content_type": "application/x-www-form-urlencoded; charset=UTF-8",
+        }
+        _last_remain_goods_web_form_debug = dbg
+        return encoded, dbg
+
     async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
         # Ensure multi-select fields (e.g. department) are encoded as repeated keys.
-        encoded = urlencode(form, doseq=True)
+        encoded, _dbg = _encode_form_with_debug(form, phase="final")
         req_headers = dict(web_headers)
         req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
         return await client.post(url, content=encoded, headers=req_headers)
@@ -2069,7 +2101,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             for attempt in range(1, 13):
                 prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
                 prep_form["prepareData"] = "true"
-                prep_encoded = urlencode(prep_form, doseq=True)
+                prep_encoded, prep_form_dbg = _encode_form_with_debug(prep_form, phase="prepare")
                 prep_headers = dict(web_headers)
                 prep_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
                 prep_resp = await client.post(url, content=prep_encoded, headers=prep_headers)
@@ -2094,6 +2126,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                                 "groupByDepartment": prep_form.get("groupByDepartment"),
                                 "departments_count": len(dep_ids),
                             },
+                            "form_debug": prep_form_dbg,
                         }
                     )
                     await asyncio.sleep(sleep_s)
@@ -2337,6 +2370,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "overall_summary": overall,
         "by_department": by_dep,
         "parse_debug": _last_remain_goods_html_parse_debug,
+        "web_form_debug": _last_remain_goods_web_form_debug,
     }
 
     _contactlenses_auto_fetch_state["last_success_unix"] = now
@@ -3151,6 +3185,7 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
         "departments": deps,
         "normalized": {d: _norm_dep_name(d) for d in deps},
         "parse_debug": global_snap.get("parse_debug"),
+        "web_form_debug": global_snap.get("web_form_debug"),
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "filename": global_snap.get("filename"),
     }
