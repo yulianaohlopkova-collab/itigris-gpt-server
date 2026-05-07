@@ -1137,6 +1137,58 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
         except Exception:
             return 0.0
 
+    # Enhance parse debug with a preview of the first matched table's structure.
+    try:
+        if _last_remain_goods_html_parse_debug is None:
+            _last_remain_goods_html_parse_debug = {}
+        _last_remain_goods_html_parse_debug["matched_tables_count"] = len(matched_tables)
+        if matched_tables:
+            header_cells0, table0 = matched_tables[0]
+            headers0 = [normalize_header(h) for h in header_cells0]
+            idx0 = {
+                "department": find_col_index(headers0, REMAINGOODS_HEADERS_NORM["department"]),
+                "qty_packs": find_col_index(headers0, REMAINGOODS_HEADERS_NORM["qty_packs"]),
+                "qty_units": find_col_index(headers0, REMAINGOODS_HEADERS_NORM["qty_units"]),
+                "remaining_in_pack": find_col_index(headers0, REMAINGOODS_HEADERS_NORM["remaining_in_pack"]),
+                "in_pack": find_col_index(headers0, REMAINGOODS_HEADERS_NORM["in_pack"]),
+                "value": find_col_index(headers0, REMAINGOODS_HEADERS_NORM["value"]),
+                "unit_price": find_col_index(headers0, REMAINGOODS_HEADERS_NORM["unit_price"]),
+            }
+            preview_rows: List[Dict[str, Any]] = []
+            tr_list = table0.find_all("tr")
+            for ri, tr in enumerate(tr_list[:60]):
+                cells = tr.find_all(["td", "th"])
+                texts = [cell_text(c) for c in cells]
+                colspans = []
+                for c in cells:
+                    cs = c.get("colspan")
+                    if cs is not None:
+                        colspans.append(str(cs))
+                preview_rows.append(
+                    {
+                        "row_index": ri,
+                        "cells": [t[:120] for t in texts[:40]],
+                        "cells_count": len(texts),
+                        "colspans": colspans[:10],
+                    }
+                )
+            # Find first occurrence of key department tokens inside this table (not whole HTML).
+            table_text_l = table0.get_text(" ", strip=False).lower()
+            token_hits: Dict[str, Any] = {}
+            for token in ["ленина", "лермонтова", "пояркова", "сахаэкспоцентр", "айсберг", "качели", "улуруу"]:
+                pos = table_text_l.find(token)
+                token_hits[token] = {"present": pos != -1, "pos": pos if pos != -1 else None}
+            _last_remain_goods_html_parse_debug["table_preview"] = {
+                "header_cells_raw": header_cells0[:40],
+                "headers_norm": headers0[:40],
+                "idx": idx0,
+                "preview_rows": preview_rows,
+                "token_hits_in_table_text": token_hits,
+            }
+    except Exception:
+        # Do not break parsing due to debug.
+        pass
+
     rows_out: List[Dict[str, Any]] = []
     for header_cells, table in matched_tables:
         headers = [normalize_header(h) for h in header_cells]
