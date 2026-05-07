@@ -422,7 +422,8 @@ _contactlenses_report_global_snapshot: Optional[Dict[str, Any]] = None
 # Debug for the most recent remainGoodsReport HTML parse (auto-web path).
 _last_remain_goods_html_parse_debug: Optional[Dict[str, Any]] = None
 # Debug for the most recent remainGoodsReport web form payload (auto-web path).
-_last_remain_goods_web_form_debug: Optional[Dict[str, Any]] = None
+_last_remain_goods_web_form_debug: Optional[Dict[str, Any]] = None  # legacy single-phase
+_last_remain_goods_web_form_debug_phases: Dict[str, Any] = {}
 _contactlenses_auto_fetch_state: Dict[str, Any] = {
     "last_attempt_unix": None,
     "last_success_unix": None,
@@ -1649,6 +1650,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         Also capture debug metadata to compare with browser HAR.
         """
         global _last_remain_goods_web_form_debug
+        global _last_remain_goods_web_form_debug_phases
         dept_vals: List[str] = []
         dep_field = form.get("department")
         if isinstance(dep_field, list):
@@ -1669,8 +1671,16 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "department_pairs_last": pairs[-5:] if len(pairs) > 5 else [],
             "encoded_len": len(encoded),
             "content_type": "application/x-www-form-urlencoded; charset=UTF-8",
+            # Useful when comparing prepare vs final.
+            "payload_meta": {
+                "userId": form.get("userId"),
+                "pageUUID": form.get("pageUUID"),
+                "uuidValue": form.get("uuidValue"),
+                "prepareData": form.get("prepareData"),
+            },
         }
         _last_remain_goods_web_form_debug = dbg
+        _last_remain_goods_web_form_debug_phases[str(phase)] = dbg
         return encoded, dbg
 
     async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
@@ -2236,6 +2246,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     },
                 )
 
+            # Browser behavior (HAR): even when prepareData=true returns 200/Success,
+            # the subsequent final reportPage POST is sent with a *different* uuidValue.
+            # If we reuse the prepare uuidValue, Optima may return an incomplete dataset.
+            report_uuid_value = str(uuid.uuid4())
+
             # 3) reportPage final (parse this HTML)
             final_resp: httpx.Response
             for attempt in range(1, 9):
@@ -2266,6 +2281,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "prep_ctx": prep_ctx,
                 "prep_snippet": (prep_resp.text or "")[:400],
                 "final_snippet": (final_resp.text or "")[:400],
+                "web_form_debug": {
+                    "prepare": _last_remain_goods_web_form_debug_phases.get("prepare"),
+                    "final": _last_remain_goods_web_form_debug_phases.get("final"),
+                },
             }
             resp = final_resp
         else:
@@ -2425,6 +2444,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "by_department": by_dep,
         "parse_debug": _last_remain_goods_html_parse_debug,
         "web_form_debug": _last_remain_goods_web_form_debug,
+        "web_form_debug_phases": _last_remain_goods_web_form_debug_phases,
     }
 
     _contactlenses_auto_fetch_state["last_success_unix"] = now
@@ -3240,6 +3260,7 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
         "normalized": {d: _norm_dep_name(d) for d in deps},
         "parse_debug": global_snap.get("parse_debug"),
         "web_form_debug": global_snap.get("web_form_debug"),
+        "web_form_debug_phases": global_snap.get("web_form_debug_phases"),
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "filename": global_snap.get("filename"),
     }
