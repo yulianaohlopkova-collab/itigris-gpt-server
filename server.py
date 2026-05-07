@@ -1093,6 +1093,7 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
             return 0.0
 
     rows_out: List[Dict[str, Any]] = []
+    current_dep: str = ""
     for tr in table.find_all("tr"):
         cells = tr.find_all(["td", "th"])
         if not cells:
@@ -1110,6 +1111,13 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
         in_pack = parse_num(texts[idx["in_pack"]]) if idx["in_pack"] is not None else 0.0
         value = parse_num(texts[idx["value"]]) if idx["value"] is not None else 0.0
         unit_price = parse_num(texts[idx["unit_price"]]) if idx["unit_price"] is not None else 0.0
+
+        # Carry-forward department name for grouped reports: detail rows may omit department cell.
+        dep_norm = normalize_header(dep)
+        if dep and dep_norm not in {"итого", "всего", "итог", "total"}:
+            current_dep = dep.strip()
+        if not dep and current_dep:
+            dep = current_dep
 
         if not dep and qty_packs == 0 and qty_units == 0 and value == 0:
             continue
@@ -2249,6 +2257,52 @@ def remain_goods_totals_by_department(rows: List[Dict[str, Any]]) -> Dict[str, D
         result[dep] = remain_goods_totals(dep_rows, prefer_summary_row=False)
     return result
 
+
+def _norm_dep_name(s: str) -> str:
+    t = (s or "").lower()
+    t = t.replace("\xa0", " ")
+    t = re.sub(r"[\"'`]", "", t)
+    # keep letters/digits/spaces only
+    t = re.sub(r"[^0-9a-zа-яё\\s]", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\\s+", " ", t).strip()
+    # common noise words
+    for w in ["тц", "торговый центр", "молл", "mall"]:
+        t = re.sub(rf"\\b{re.escape(w)}\\b", "", t).strip()
+    t = re.sub(r"\\s+", " ", t).strip()
+    return t
+
+
+def _match_snapshot_department(requested: str, available: List[str]) -> Optional[str]:
+    """
+    Best-effort match department name from snapshot keys.
+    Prefers exact normalized match, then substring match (either direction),
+    and finally a token-overlap heuristic.
+    """
+    req_n = _norm_dep_name(requested)
+    if not req_n:
+        return None
+    best: Tuple[int, str] = (-1, "")
+    for cand in available:
+        cand_n = _norm_dep_name(cand)
+        if not cand_n:
+            continue
+        if cand_n == req_n:
+            return cand
+        if cand_n in req_n or req_n in cand_n:
+            score = min(len(cand_n), len(req_n)) + 1000
+            if score > best[0]:
+                best = (score, cand)
+            continue
+        # token overlap score
+        req_tokens = set(req_n.split())
+        cand_tokens = set(cand_n.split())
+        overlap = len(req_tokens & cand_tokens)
+        if overlap:
+            score = overlap * 10 + min(len(req_n), len(cand_n))
+            if score > best[0]:
+                best = (score, cand)
+    return best[1] if best[0] >= 0 else None
+
 def rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str = "Remains") -> bytes:
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {"in_memory": True})
@@ -2904,12 +2958,14 @@ async def contactlenses_stock(
         # 1) Prefer global snapshot (single upload for all departments).
         global_snap = get_global_snapshot()
         if global_snap:
-            # Match by normalized department name.
-            for dep_name, summary in global_snap["by_department"].items():
-                if normalize_header(dep_name) == normalize_header(department_name):
-                    return {
+            available = list(global_snap["by_department"].keys())
+            matched = _match_snapshot_department(department_name, available)
+            if matched:
+                summary = global_snap["by_department"][matched]
+                return {
                         "category": "contactlenses",
                         "department": department_name,
+                        "matched_department": matched,
                         "source": "remainGoodsReport global snapshot (truth for packs/units/value; includes open packs)",
                         "snapshot": {
                             "stored_at_unix": global_snap["stored_at_unix"],
@@ -2959,6 +3015,27 @@ async def contactlenses_stock(
         return api_result
 
     return JSONResponse({"error": "bad_source", "allowed": ["auto", "snapshot", "api"]}, status_code=400)
+
+
+@app.get("/contactlenses/remainGoodsReport/snapshot/departments")
+async def contactlenses_remain_goods_report_snapshot_departments(request: Request) -> Any:
+    """
+    Debug helper: list department keys that were parsed into the current global snapshot.
+    """
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    global_snap = get_global_snapshot()
+    if not global_snap:
+        return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
+    deps = sorted(list((global_snap.get("by_department") or {}).keys()))
+    return {
+        "departments_count": len(deps),
+        "departments": deps,
+        "normalized": {d: _norm_dep_name(d) for d in deps},
+        "stored_at_unix": global_snap.get("stored_at_unix"),
+        "filename": global_snap.get("filename"),
+    }
 
 
 @app.get("/openapi.json", include_in_schema=False)
