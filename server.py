@@ -424,6 +424,7 @@ _last_remain_goods_html_parse_debug: Optional[Dict[str, Any]] = None
 # Debug for the most recent remainGoodsReport web form payload (auto-web path).
 _last_remain_goods_web_form_debug: Optional[Dict[str, Any]] = None  # legacy single-phase
 _last_remain_goods_web_form_debug_phases: Dict[str, Any] = {}
+_last_remain_goods_web_http_debug_phases: Dict[str, Any] = {}
 _contactlenses_auto_fetch_state: Dict[str, Any] = {
     "last_attempt_unix": None,
     "last_success_unix": None,
@@ -1692,6 +1693,32 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         _last_remain_goods_web_form_debug_phases[str(phase)] = dbg
         return encoded, dbg
 
+    def _cookie_header_from_client(client: httpx.AsyncClient) -> str:
+        # Best-effort: serialize cookies that are currently in the jar.
+        parts: List[str] = []
+        try:
+            jar = client.cookies.jar  # type: ignore[attr-defined]
+            for c in jar:
+                if getattr(c, "name", None) and getattr(c, "value", None) is not None:
+                    parts.append(f"{c.name}={c.value}")
+        except Exception:
+            return ""
+        # Preserve order for diffing.
+        return "; ".join(parts)
+
+    def _store_http_debug(phase: str, url: str, headers: Dict[str, str], encoded_body: str, client: httpx.AsyncClient) -> None:
+        global _last_remain_goods_web_http_debug_phases
+        # Keep it JSON-friendly and stable for 1:1 diff against HAR.
+        hdrs = {k: str(v) for k, v in headers.items()}
+        _last_remain_goods_web_http_debug_phases[str(phase)] = {
+            "url": url,
+            "headers": hdrs,
+            "cookie_header": _cookie_header_from_client(client),
+            "encoded_len": len(encoded_body),
+            "encoded_body": encoded_body,
+            "encoded_pairs_prefix": encoded_body.split("&")[:60],
+        }
+
     async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
         # Ensure multi-select fields (e.g. department) are encoded as repeated keys.
@@ -1700,6 +1727,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # HAR (final): text/html, */*; q=0.01
         req_headers["Accept"] = "text/html, */*; q=0.01"
         req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+        _store_http_debug("final", url, req_headers, encoded, client)
         return await client.post(url, content=encoded, headers=req_headers)
 
     async def get_report_module_context(client: httpx.AsyncClient, user_id: str) -> Dict[str, str]:
@@ -2181,6 +2209,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 # HAR (prepare): */*
                 prep_headers["Accept"] = "*/*"
                 prep_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+                _store_http_debug("prepare", url, prep_headers, prep_encoded, client)
                 prep_resp = await client.post(url, content=prep_encoded, headers=prep_headers)
                 if prep_resp.status_code == 200:
                     prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
@@ -2458,6 +2487,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "parse_debug": _last_remain_goods_html_parse_debug,
         "web_form_debug": _last_remain_goods_web_form_debug,
         "web_form_debug_phases": _last_remain_goods_web_form_debug_phases,
+        "web_http_debug_phases": _last_remain_goods_web_http_debug_phases,
     }
 
     _contactlenses_auto_fetch_state["last_success_unix"] = now
@@ -3274,6 +3304,7 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
         "parse_debug": global_snap.get("parse_debug"),
         "web_form_debug": global_snap.get("web_form_debug"),
         "web_form_debug_phases": global_snap.get("web_form_debug_phases"),
+        "web_http_debug_phases": global_snap.get("web_http_debug_phases"),
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "filename": global_snap.get("filename"),
     }
