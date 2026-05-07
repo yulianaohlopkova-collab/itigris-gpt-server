@@ -2294,6 +2294,23 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # If we reuse the prepare uuidValue, Optima may return an incomplete dataset.
             report_uuid_value = str(uuid.uuid4())
 
+            # HAR shows an intermediate GET to /api-view/index?notUUIDAction=true between prepare and final.
+            # It may prime server-side state for the report render.
+            try:
+                api_view_url = f"https://optima.itigris.ru/{APP_NAME}/api-view/index"
+                api_view_params = {
+                    "userId": report_user_id,
+                    "pageUUID": report_page_uuid,
+                    "companyUUID": company_uuid,
+                    "notUUIDAction": "true",
+                }
+                api_headers = dict(web_headers)
+                api_headers["Accept"] = "text/html, */*; q=0.01"
+                await client.get(api_view_url, params=api_view_params, headers=api_headers)
+            except Exception:
+                # Non-fatal; continue to final request.
+                pass
+
             # 3) reportPage final (parse this HTML)
             final_resp: httpx.Response
             for attempt in range(1, 9):
@@ -2328,6 +2345,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "prepare": _last_remain_goods_web_form_debug_phases.get("prepare"),
                     "final": _last_remain_goods_web_form_debug_phases.get("final"),
                 },
+                "note": "Added HAR intermediate GET /api-view/index?notUUIDAction=true between prepare and final.",
             }
             resp = final_resp
         else:
