@@ -97,6 +97,9 @@ DEPARTMENTS: Dict[str, int] = {
     "Интернет-магазин Якутск": 1000000018,
     "Склад. Интернет-магазин Якутск": 1000000017,
     "Айсберг": 1000000016,
+    "Цех Калининград": 1000000015,
+    "З-Форт Калининград": 1000000014,
+    "Склад КГД": 1000000013,
     "Качели": 1000000012,
     "Улуру": 1000000011,
     "Лермонтова": 1000000009,
@@ -116,6 +119,9 @@ _DEPARTMENT_ID_TO_DISPLAY_NAME: Dict[int, str] = {
     1000000018: "Интернет-магазин Якутск",
     1000000017: "Склад ИП БРАК",  # best-effort; varies by install
     1000000016: "ТЦ Айсберг",
+    1000000015: "Цех Калининград",
+    1000000014: "З-Форт Калининград",
+    1000000013: "Склад КГД. ИП Суханов Е.В.",
     1000000012: "ТЦ Качели",
     1000000011: "Улуруу Молл",
     1000000009: "Лермонтова, 49",
@@ -126,6 +132,30 @@ _DEPARTMENT_ID_TO_DISPLAY_NAME: Dict[int, str] = {
     1000000004: "СахаЭкспоЦентр",
     1000000003: "Офис",
 }
+
+# When no explicit department list is provided, we try to mirror the browser's
+# \"Выделить все\" behavior from the report filter UI. HAR shows that Optima sends
+# departments in a specific order and may omit some options (e.g. \"Офис\").
+REMAINGOODS_WEB_DEFAULT_DEPARTMENT_IDS: List[str] = [
+    # Mirrors optima.itigris.ru.har2.har payload ordering.
+    "1000000014",  # З-Форт Калининград
+    "1000000018",  # Интернет-магазин Якутск
+    "1000000021",  # Ленина, 7
+    "1000000009",  # Лермонтова, 49
+    "1000000019",  # Мобильный салон
+    "1000000008",  # Пояркова, 5
+    "1000000004",  # СахаЭкспоЦентр
+    "1000000007",  # Склад ИП
+    "1000000017",  # Склад ИП БРАК
+    "1000000013",  # Склад КГД. ИП Суханов Е.В.
+    "1000000020",  # Склад. Мобильный салон
+    "1000000005",  # Склад ООО
+    "1000000016",  # ТЦ Айсберг
+    "1000000012",  # ТЦ Качели
+    "1000000011",  # Улуруу Молл
+    "1000000006",  # Цех
+    "1000000015",  # Цех Калининград
+]
 
 DEPARTMENT_ALIASES: Dict[str, int] = {
     "качели": 1000000012,
@@ -1419,7 +1449,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
     if REMAINGOODS_WEB_DEPARTMENT_IDS:
         dep_ids = [d.strip() for d in REMAINGOODS_WEB_DEPARTMENT_IDS.split(",") if d.strip()]
     else:
-        dep_ids = [str(v) for v in DEPARTMENTS.values()]
+        # Prefer a stable default that matches the browser \"select all\" payload.
+        dep_ids = list(REMAINGOODS_WEB_DEFAULT_DEPARTMENT_IDS)
 
     def build_report_form(user_id: str, page_uuid: str, uuid_value: str) -> Dict[str, Any]:
         # NOTE: For httpx.AsyncClient we must avoid passing "data" as a list of tuples with repeated
