@@ -369,6 +369,8 @@ REMAINGOODS_SNAPSHOT_TTL_SECONDS = int(os.getenv("REMAINGOODS_SNAPSHOT_TTL_SECON
 # In-memory snapshot cache (Render dynos may restart; this is MVP-grade).
 _contactlenses_report_snapshots: Dict[int, Dict[str, Any]] = {}
 _contactlenses_report_global_snapshot: Optional[Dict[str, Any]] = None
+# Debug for the most recent remainGoodsReport HTML parse (auto-web path).
+_last_remain_goods_html_parse_debug: Optional[Dict[str, Any]] = None
 _contactlenses_auto_fetch_state: Dict[str, Any] = {
     "last_attempt_unix": None,
     "last_success_unix": None,
@@ -1007,8 +1009,63 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
     Parse remainGoodsReport HTML page and convert to normalized rows.
     HTML layout can change; we search for a table that contains required headers.
     """
+    global _last_remain_goods_html_parse_debug
     html = raw.decode("utf-8", errors="replace")
     soup = BeautifulSoup(html, "html.parser")
+
+    # Parse-time debug: probe for department names and structural hints.
+    try:
+        dept_probes = [
+            "Ленина",
+            "Лермонтова",
+            "Пояркова",
+            "СахаЭкспоЦентр",
+            "Айсберг",
+            "Качели",
+            "Улуруу",
+        ]
+        html_l = html.lower()
+        hits: Dict[str, Any] = {}
+        for name in dept_probes:
+            name_l = name.lower()
+            idxs: List[int] = []
+            start = 0
+            while True:
+                i = html_l.find(name_l, start)
+                if i == -1:
+                    break
+                idxs.append(i)
+                start = i + len(name_l)
+                if len(idxs) >= 3:
+                    break
+            snippets: List[str] = []
+            for i in idxs[:2]:
+                snippets.append(html[max(0, i - 180) : min(len(html), i + 320)])
+            hits[name] = {"count": len(idxs), "snippets": snippets}
+
+        colspan_nodes = soup.find_all(attrs={"colspan": True})
+        colspan_samples: List[Dict[str, Any]] = []
+        for node in colspan_nodes[:20]:
+            try:
+                colspan_samples.append(
+                    {
+                        "tag": node.name,
+                        "colspan": node.get("colspan"),
+                        "text": node.get_text(" ", strip=True)[:160],
+                    }
+                )
+            except Exception:
+                continue
+
+        _last_remain_goods_html_parse_debug = {
+            "html_len": len(html),
+            "tables_found": len(soup.find_all("table")),
+            "colspan_nodes_count": len(colspan_nodes),
+            "colspan_samples": colspan_samples,
+            "department_probes": hits,
+        }
+    except Exception:
+        _last_remain_goods_html_parse_debug = {"error": "parse_debug_failed"}
 
     required_keys = {"qty_packs", "qty_units", "remaining_in_pack", "in_pack", "value"}
     tables = soup.find_all("table")
@@ -2219,6 +2276,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "rows_count": len(rows),
         "overall_summary": overall,
         "by_department": by_dep,
+        "parse_debug": _last_remain_goods_html_parse_debug,
     }
 
     _contactlenses_auto_fetch_state["last_success_unix"] = now
@@ -3032,6 +3090,7 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
         "departments_count": len(deps),
         "departments": deps,
         "normalized": {d: _norm_dep_name(d) for d in deps},
+        "parse_debug": global_snap.get("parse_debug"),
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "filename": global_snap.get("filename"),
     }
