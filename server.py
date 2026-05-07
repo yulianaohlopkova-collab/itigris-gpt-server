@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs
 import asyncio
+from urllib.parse import urlencode
 
 import httpx
 import openpyxl
@@ -1588,7 +1589,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
     async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
-        return await client.post(url, data=form, headers=headers)
+        # Ensure multi-select fields (e.g. department) are encoded as repeated keys.
+        encoded = urlencode(form, doseq=True)
+        req_headers = dict(web_headers)
+        req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+        return await client.post(url, content=encoded, headers=req_headers)
 
     async def get_report_module_context(client: httpx.AsyncClient, user_id: str) -> Dict[str, str]:
         """
@@ -2064,7 +2069,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             for attempt in range(1, 13):
                 prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
                 prep_form["prepareData"] = "true"
-                prep_resp = await client.post(url, data=prep_form, headers=web_headers)
+                prep_encoded = urlencode(prep_form, doseq=True)
+                prep_headers = dict(web_headers)
+                prep_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+                prep_resp = await client.post(url, content=prep_encoded, headers=prep_headers)
                 if prep_resp.status_code == 200:
                     prep_ctx = _extract_optima_ctx_from_text(prep_resp.text or "")
                     # pageUUID should remain stable; uuidValue may update.
