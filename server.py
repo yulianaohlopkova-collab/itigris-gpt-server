@@ -2192,9 +2192,39 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             },
             base_ctx,
         )
+        # If we are in bearer-token mode, first try to bootstrap a cookie session by visiting /odl.
+        # Some Optima installs use tokenSelf for API auth but still require cookies for legacy pages.
+        bootstrap_info: Dict[str, Any] = {}
+        if (base_ctx.get("access_token") or "").strip():
+            try:
+                main_url = f"https://optima.itigris.ru/{APP_NAME}"
+                main_hdrs = _maybe_add_bearer(
+                    {
+                        "User-Agent": ua,
+                        "Accept": "text/html, */*; q=0.01",
+                        "Referer": f"https://optima.itigris.ru/{APP_NAME}",
+                        "Origin": "https://optima.itigris.ru",
+                    },
+                    base_ctx,
+                )
+                main_r = await client.get(main_url, headers=main_hdrs, follow_redirects=True)
+                bootstrap_info = {
+                    "main_status": main_r.status_code,
+                    "main_set_cookie_present": bool(main_r.headers.get("set-cookie") or main_r.headers.get("Set-Cookie")),
+                }
+            except Exception as exc:
+                bootstrap_info = {"main_error": type(exc).__name__}
+
         r = await client.get(sp_url, headers=hdrs, follow_redirects=True)
         debug["steps"].append(
-            {"step": "startPageAccountant_direct", "status": r.status_code, "final_url": str(r.request.url)[:500]}
+            {
+                "step": "startPageAccountant_direct",
+                "status": r.status_code,
+                "final_url": str(r.request.url)[:500],
+                "sent_headers": hdrs,
+                "cookie_header": _cookie_header_from_client(client),
+                "bootstrap": bootstrap_info or None,
+            }
         )
         if r.status_code == 401:
             debug["error"] = "startPageAccountant_401"
