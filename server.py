@@ -1649,7 +1649,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
     def _maybe_add_bearer(headers: Dict[str, str], ctx: Dict[str, str]) -> Dict[str, str]:
         token = (ctx.get("access_token") or "").strip()
-        if not token:
+        # Bearer auth is only valid for API flows on some Optima builds.
+        # Legacy HTML reportsStart/remainGoodsReport pages require cookie-based auth.
+        if (ctx.get("auth_mode") != "bearer") or (not token):
             return headers
         out = dict(headers)
         out["Authorization"] = f"Bearer {token}"
@@ -1912,6 +1914,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "uuidValue": extracted_uuid_value or "",
                     "companyUUID": company_uuid,
                     "access_token": access_token,
+                    "auth_mode": "bearer",
                 }
 
             # 2) Cookie + JS redirect mode
@@ -1965,6 +1968,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "pageUUID": (qs.get("pageUUID") or [""])[0],
                 "uuidValue": (qs.get("uuidValue") or [""])[0],
                 "companyUUID": (qs.get("companyUUID") or [company_uuid])[0] or company_uuid,
+                "auth_mode": "cookie",
             }
             # Hit userStart once; some sessions set additional cookies.
             user_start_ok = False
@@ -2258,6 +2262,15 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Preferred: server-side login to get fresh session.
         if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
             ctx = await login_and_get_context(client)
+            # Legacy HTML reports flow requires cookie-based auth; bearer token is not sufficient for reportsStart.
+            if ctx.get("auth_mode") == "bearer":
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_legacy_cookie_login_failed",
+                        "message": "Login returned tokenSelf/accessToken (bearer) but reportsStart requires cookie auth.",
+                    },
+                )
             # remainGoodsReport uses its own pageUUID/uuidValue chain:
             # login -> userStart -> remainGoodsReport/startPage -> reportPage (prepareData=true) -> reportPage.
             report_user_id = (ITIGRIS_WEB_USER_ID or ctx.get("userId") or REMAINGOODS_WEB_USER_ID or "").strip()
