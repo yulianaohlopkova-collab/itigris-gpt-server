@@ -1802,7 +1802,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             raise HTTPException(status_code=500, detail="auto_web_login_not_configured")
 
         # Bootstrap cookies (JSESSIONID, route, etc.) and try to extract pageUUID/uuidValue if present.
-        # In a real browser a GET happens before login.
+        # In a real browser a GET to the app root happens before login.
         try:
             await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
         except Exception:
@@ -1843,12 +1843,21 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "companyUUID": company_uuid,
         }
 
+        # Use navigation-like headers (no X-Requested-With). Some Optima builds return tokenSelf
+        # (API auth) when the login is treated as XHR; legacy HTML reports require cookie auth.
+        login_headers = {
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": f"https://optima.itigris.ru/{APP_NAME}",
+            "Origin": "https://optima.itigris.ru",
+        }
+
         # We want to capture redirect params from Location.
         try:
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=web_headers, follow_redirects=False)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=login_headers, follow_redirects=False)
         except TypeError:
             # Older httpx: follow_redirects is client-level only.
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=web_headers)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=login_headers)
 
         login_status = resp.status_code
         login_location = resp.headers.get("location") or resp.headers.get("Location") or ""
