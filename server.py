@@ -1875,18 +1875,26 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
         # If login returned 200 without Location, some Optima builds redirect via JS:
         # window.location = "https://optima.itigris.ru/odl";
-        # Treat that as success and proceed with a GET to bootstrap cookies/context.
+        # Per user reports this is a SUCCESSFUL login (cookies are already set).
         if login_status == 200 and not login_location:
             body = resp.text or ""
-            m = re.search(r'window\\.location\\s*=\\s*\"([^\"]+)\"', body)
-            if m:
-                location = m.group(1).strip()
-                try:
-                    await client.get(location, headers=web_headers)
-                except Exception:
-                    pass
-                # Continue; caller will probe main page and derive module contexts.
-                login_location = location
+            if login_set_cookie_present and "window.location" in body:
+                # Support both single and double quotes (and possible window.location.href).
+                m = re.search(r"window\\.location(?:\\.href)?\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]", body)
+                location = (m.group(1).strip() if m else "")
+                # Fallback: find the first absolute /odl URL.
+                if not location:
+                    m2 = re.search(r"(https?://optima\\.itigris\\.ru/odl[^'\\\"\\s;]*)", body)
+                    location = (m2.group(1).strip() if m2 else "")
+                if location:
+                    try:
+                        await client.get(location, headers=web_headers)
+                    except Exception:
+                        pass
+                    login_location = location
+                else:
+                    # Still treat as success; caller will probe main page next.
+                    login_location = f"https://optima.itigris.ru/{APP_NAME}"
             else:
                 raise HTTPException(
                     status_code=502,
