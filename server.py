@@ -1647,6 +1647,14 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         "Origin": "https://optima.itigris.ru",
     }
 
+    def _maybe_add_bearer(headers: Dict[str, str], ctx: Dict[str, str]) -> Dict[str, str]:
+        token = (ctx.get("access_token") or "").strip()
+        if not token:
+            return headers
+        out = dict(headers)
+        out["Authorization"] = f"Bearer {token}"
+        return out
+
     def _encode_form_with_debug(form: Dict[str, Any], phase: str) -> Tuple[str, Dict[str, Any]]:
         """
         Encode form as x-www-form-urlencoded with repeated keys for list values (doseq=True).
@@ -1720,7 +1728,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "encoded_pairs_prefix": encoded_body.split("&")[:60],
         }
 
-    async def _download_excel_export(client: httpx.AsyncClient, user_id: str, page_uuid: str) -> Optional[Tuple[str, bytes, httpx.Response]]:
+    async def _download_excel_export(client: httpx.AsyncClient, user_id: str, page_uuid: str, ctx: Dict[str, str]) -> Optional[Tuple[str, bytes, httpx.Response]]:
         """
         Browser (HAR5) downloads the full report as .xls via GET /remainGoodsReport/reportPage?excelPage=true...
         This appears to return full data when HTML is a truncated preview.
@@ -1731,12 +1739,15 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             {"userId": user_id, "pageUUID": page_uuid, "notUUIDAction": "true", "excelPage": "true", "excelPageStartPage": "true"},
             {"userId": user_id, "pageUUID": page_uuid, "notUUIDAction": "true", "excelPage": "true"},
         ]
-        export_headers = {
+        export_headers = _maybe_add_bearer(
+            {
             "User-Agent": ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Referer": f"{base_url}",
             "Origin": "https://optima.itigris.ru",
-        }
+            },
+            ctx,
+        )
         for params in variants:
             try:
                 r = await client.get(export_url, params=params, headers=export_headers)
@@ -1756,11 +1767,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             return filename, (r.content or b""), r
         return None
 
-    async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
+    async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str, ctx: Dict[str, str]) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
         # Ensure multi-select fields (e.g. department) are encoded as repeated keys.
         encoded, _dbg = _encode_form_with_debug(form, phase="final")
-        req_headers = dict(web_headers)
+        req_headers = dict(_maybe_add_bearer(web_headers, ctx))
         # HAR (final): text/html, */*; q=0.01
         req_headers["Accept"] = "text/html, */*; q=0.01"
         req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
@@ -1875,9 +1886,34 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
         # If login returned 200 without Location, some Optima builds redirect via JS:
         # window.location = "https://optima.itigris.ru/odl";
-        # Per user reports this is a SUCCESSFUL login (cookies are already set).
+        # Newer builds may return tokenSelf { accessToken, refreshToken } without setting cookies.
+        # Both are SUCCESSFUL logins per user reports.
         if login_status == 200 and not login_location:
             body = resp.text or ""
+            # 1) Bearer token mode (no cookies required)
+            if (not login_set_cookie_present) and ("tokenSelf" in body) and ("accessToken" in body):
+                m = re.search(r'accessToken\\s*:\\s*\"([^\"]+)\"', body)
+                if not m:
+                    m = re.search(r"accessToken\\s*:\\s*'([^']+)'", body)
+                access_token = (m.group(1).strip() if m else "")
+                if not access_token:
+                    raise HTTPException(
+                        status_code=502,
+                        detail={
+                            "error": "auto_web_login_token_parse_failed",
+                            "status_code": login_status,
+                            "body_snippet": body[:1200],
+                        },
+                    )
+                return {
+                    "userId": extracted_user_id or "",
+                    "pageUUID": extracted_page_uuid or "",
+                    "uuidValue": extracted_uuid_value or "",
+                    "companyUUID": company_uuid,
+                    "access_token": access_token,
+                }
+
+            # 2) Cookie + JS redirect mode
             if login_set_cookie_present and "window.location" in body:
                 # Support both single and double quotes (and possible window.location.href).
                 m = re.search(r"window\\.location(?:\\.href)?\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]", body)
@@ -2139,19 +2175,22 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         out["_debug"] = debug  # type: ignore[typeddict-item]
         return out
 
-    async def _bootstrap_accountant_reports_ctx(client: httpx.AsyncClient) -> Dict[str, str]:
+    async def _bootstrap_accountant_reports_ctx(client: httpx.AsyncClient, base_ctx: Dict[str, str]) -> Dict[str, str]:
         """
         After login, some sessions don't have a usable ctx (pageUUID/uuidValue/userId) in redirects.
         Per user request: force a navigation into accountant reports start page and extract ctx there.
         """
         debug: Dict[str, Any] = {"steps": []}
         sp_url = f"https://optima.itigris.ru/{APP_NAME}/reportsStart/startPageAccountant"
-        hdrs = {
+        hdrs = _maybe_add_bearer(
+            {
             "User-Agent": ua,
             "Accept": "text/html, */*; q=0.01",
             "Referer": f"https://optima.itigris.ru/{APP_NAME}",
             "Origin": "https://optima.itigris.ru",
-        }
+            },
+            base_ctx,
+        )
         r = await client.get(sp_url, headers=hdrs, follow_redirects=True)
         debug["steps"].append(
             {"step": "startPageAccountant_direct", "status": r.status_code, "final_url": str(r.request.url)[:500]}
@@ -2200,7 +2239,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # Per user: force-start accountant module and extract ctx; retry login once if 401.
             for attempt in range(1, 3):
                 try:
-                    module_ctx = await _bootstrap_accountant_reports_ctx(client)
+                    module_ctx = await _bootstrap_accountant_reports_ctx(client, ctx)
                 except Exception:
                     module_ctx = {}
                 if (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
@@ -2244,7 +2283,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "pageUUID": seed_page_uuid,
                     "companyUUID": company_uuid,
                 }
-                return await client.post(start_url, data=payload, headers=web_headers)
+                return await client.post(start_url, data=payload, headers=_maybe_add_bearer(web_headers, ctx))
 
             # startPage expects the reports navigation context (HAR chain).
             preferred_seed_page_uuid = (
@@ -2325,7 +2364,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
                 prep_form["prepareData"] = "true"
                 prep_encoded, prep_form_dbg = _encode_form_with_debug(prep_form, phase="prepare")
-                prep_headers = dict(web_headers)
+                prep_headers = dict(_maybe_add_bearer(web_headers, ctx))
                 # HAR (prepare): */*
                 prep_headers["Accept"] = "*/*"
                 prep_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
@@ -2412,7 +2451,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # HAR shows export GET uses the *accountant reports* pageUUID (module_ctx.pageUUID),
             # not the remainGoodsReport module pageUUID.
             export_page_uuid = (module_ctx.get("pageUUID") or "").strip() or report_page_uuid
-            export = await _download_excel_export(client, user_id=report_user_id, page_uuid=export_page_uuid)
+            export = await _download_excel_export(client, user_id=report_user_id, page_uuid=export_page_uuid, ctx=ctx)
             if export and export[1]:
                 export_filename, export_bytes, export_resp = export
                 # Parse .xls/.xlsx and continue; avoids truncated HTML preview.
@@ -2445,7 +2484,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 }
                 api_headers = dict(web_headers)
                 api_headers["Accept"] = "text/html, */*; q=0.01"
-                await client.get(api_view_url, params=api_view_params, headers=api_headers)
+                await client.get(api_view_url, params=api_view_params, headers=_maybe_add_bearer(api_headers, ctx))
             except Exception:
                 # Non-fatal; continue to final request.
                 pass
@@ -2453,7 +2492,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # 3) reportPage final (parse this HTML)
             final_resp: httpx.Response
             for attempt in range(1, 9):
-                final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value)
+                final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value, ctx)
                 if final_resp.status_code == 200:
                     break
                 if final_resp.status_code == 211:
