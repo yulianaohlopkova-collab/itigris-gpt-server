@@ -1647,15 +1647,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         "Origin": "https://optima.itigris.ru",
     }
 
+    # NOTE: Legacy Optima HTML reports flow uses cookie-based auth.
+    # We intentionally do NOT send Authorization: Bearer headers in this pipeline.
     def _maybe_add_bearer(headers: Dict[str, str], ctx: Dict[str, str]) -> Dict[str, str]:
-        token = (ctx.get("access_token") or "").strip()
-        # Bearer auth is only valid for API flows on some Optima builds.
-        # Legacy HTML reportsStart/remainGoodsReport pages require cookie-based auth.
-        if (ctx.get("auth_mode") != "bearer") or (not token):
-            return headers
-        out = dict(headers)
-        out["Authorization"] = f"Bearer {token}"
-        return out
+        return headers
 
     def _encode_form_with_debug(form: Dict[str, Any], phase: str) -> Tuple[str, Dict[str, Any]]:
         """
@@ -1741,15 +1736,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             {"userId": user_id, "pageUUID": page_uuid, "notUUIDAction": "true", "excelPage": "true", "excelPageStartPage": "true"},
             {"userId": user_id, "pageUUID": page_uuid, "notUUIDAction": "true", "excelPage": "true"},
         ]
-        export_headers = _maybe_add_bearer(
-            {
+        export_headers = {
             "User-Agent": ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Referer": f"{base_url}",
             "Origin": "https://optima.itigris.ru",
-            },
-            ctx,
-        )
+        }
         for params in variants:
             try:
                 r = await client.get(export_url, params=params, headers=export_headers)
@@ -1769,11 +1761,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             return filename, (r.content or b""), r
         return None
 
-    async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str, ctx: Dict[str, str]) -> httpx.Response:
+    async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
         # Ensure multi-select fields (e.g. department) are encoded as repeated keys.
         encoded, _dbg = _encode_form_with_debug(form, phase="final")
-        req_headers = dict(_maybe_add_bearer(web_headers, ctx))
+        req_headers = dict(web_headers)
         # HAR (final): text/html, */*; q=0.01
         req_headers["Accept"] = "text/html, */*; q=0.01"
         req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
@@ -1908,14 +1900,15 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                             "body_snippet": body[:1200],
                         },
                     )
-                return {
-                    "userId": extracted_user_id or "",
-                    "pageUUID": extracted_page_uuid or "",
-                    "uuidValue": extracted_uuid_value or "",
-                    "companyUUID": company_uuid,
-                    "access_token": access_token,
-                    "auth_mode": "bearer",
-                }
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_legacy_cookie_login_failed",
+                        "message": "Optima returned tokenSelf/accessToken but legacy HTML reports require cookie auth.",
+                        "status_code": login_status,
+                        "body_snippet": body[:1200],
+                    },
+                )
 
             # 2) Cookie + JS redirect mode
             if login_set_cookie_present and "window.location" in body:
@@ -2187,38 +2180,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         """
         debug: Dict[str, Any] = {"steps": []}
         sp_url = f"https://optima.itigris.ru/{APP_NAME}/reportsStart/startPageAccountant"
-        hdrs = _maybe_add_bearer(
-            {
+        hdrs = {
             "User-Agent": ua,
             "Accept": "text/html, */*; q=0.01",
             "Referer": f"https://optima.itigris.ru/{APP_NAME}",
             "Origin": "https://optima.itigris.ru",
-            },
-            base_ctx,
-        )
-        # If we are in bearer-token mode, first try to bootstrap a cookie session by visiting /odl.
-        # Some Optima installs use tokenSelf for API auth but still require cookies for legacy pages.
-        bootstrap_info: Dict[str, Any] = {}
-        if (base_ctx.get("access_token") or "").strip():
-            try:
-                main_url = f"https://optima.itigris.ru/{APP_NAME}"
-                main_hdrs = _maybe_add_bearer(
-                    {
-                        "User-Agent": ua,
-                        "Accept": "text/html, */*; q=0.01",
-                        "Referer": f"https://optima.itigris.ru/{APP_NAME}",
-                        "Origin": "https://optima.itigris.ru",
-                    },
-                    base_ctx,
-                )
-                main_r = await client.get(main_url, headers=main_hdrs, follow_redirects=True)
-                bootstrap_info = {
-                    "main_status": main_r.status_code,
-                    "main_set_cookie_present": bool(main_r.headers.get("set-cookie") or main_r.headers.get("Set-Cookie")),
-                }
-            except Exception as exc:
-                bootstrap_info = {"main_error": type(exc).__name__}
-
+        }
         r = await client.get(sp_url, headers=hdrs, follow_redirects=True)
         debug["steps"].append(
             {
@@ -2227,7 +2194,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "final_url": str(r.request.url)[:500],
                 "sent_headers": hdrs,
                 "cookie_header": _cookie_header_from_client(client),
-                "bootstrap": bootstrap_info or None,
+                "bootstrap": None,
             }
         )
         if r.status_code == 401:
@@ -2262,13 +2229,14 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Preferred: server-side login to get fresh session.
         if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
             ctx = await login_and_get_context(client)
-            # Legacy HTML reports flow requires cookie-based auth; bearer token is not sufficient for reportsStart.
-            if ctx.get("auth_mode") == "bearer":
+            # Legacy HTML reports flow requires cookie-based auth.
+            # If login returned tokenSelf/accessToken without a cookie-session redirect, fail early.
+            if (ctx.get("access_token") or "").strip():
                 raise HTTPException(
                     status_code=502,
                     detail={
                         "error": "auto_web_legacy_cookie_login_failed",
-                        "message": "Login returned tokenSelf/accessToken (bearer) but reportsStart requires cookie auth.",
+                        "message": "Login returned tokenSelf/accessToken but legacy reportsStart requires cookie auth.",
                     },
                 )
             # remainGoodsReport uses its own pageUUID/uuidValue chain:
@@ -2327,7 +2295,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "pageUUID": seed_page_uuid,
                     "companyUUID": company_uuid,
                 }
-                return await client.post(start_url, data=payload, headers=_maybe_add_bearer(web_headers, ctx))
+                return await client.post(start_url, data=payload, headers=web_headers)
 
             # startPage expects the reports navigation context (HAR chain).
             preferred_seed_page_uuid = (
@@ -2408,7 +2376,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 prep_form = build_report_form(user_id=report_user_id, page_uuid=report_page_uuid, uuid_value=report_uuid_value)
                 prep_form["prepareData"] = "true"
                 prep_encoded, prep_form_dbg = _encode_form_with_debug(prep_form, phase="prepare")
-                prep_headers = dict(_maybe_add_bearer(web_headers, ctx))
+                prep_headers = dict(web_headers)
                 # HAR (prepare): */*
                 prep_headers["Accept"] = "*/*"
                 prep_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
@@ -2528,7 +2496,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 }
                 api_headers = dict(web_headers)
                 api_headers["Accept"] = "text/html, */*; q=0.01"
-                await client.get(api_view_url, params=api_view_params, headers=_maybe_add_bearer(api_headers, ctx))
+                await client.get(api_view_url, params=api_view_params, headers=api_headers)
             except Exception:
                 # Non-fatal; continue to final request.
                 pass
@@ -2536,7 +2504,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # 3) reportPage final (parse this HTML)
             final_resp: httpx.Response
             for attempt in range(1, 9):
-                final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value, ctx)
+                final_resp = await do_report_request(client, report_user_id, report_page_uuid, report_uuid_value)
                 if final_resp.status_code == 200:
                     break
                 if final_resp.status_code == 211:
