@@ -2235,6 +2235,19 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         return out
 
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        # Rollback safety: if a static cookie + context is configured, prefer it.
+        # This was the last known stable way to fetch legacy HTML reports when web login behavior changes.
+        if REMAINGOODS_WEB_COOKIE and REMAINGOODS_WEB_USER_ID and REMAINGOODS_WEB_PAGE_UUID and REMAINGOODS_WEB_UUID_VALUE:
+            client.headers.update({"Cookie": REMAINGOODS_WEB_COOKIE})
+            resp = await do_report_request(client, REMAINGOODS_WEB_USER_ID, REMAINGOODS_WEB_PAGE_UUID, REMAINGOODS_WEB_UUID_VALUE)
+            if resp.status_code == 200:
+                try:
+                    rows = _parse_remain_goods_html(resp.content)
+                    return f"remainGoodsReport_reportPage_{date_ddmmyyyy}.html", rows
+                except Exception:
+                    # Fall through to login-based flow.
+                    pass
+
         # Preferred: server-side login to get fresh session.
         if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
             ctx = await login_and_get_context(client)
@@ -3526,6 +3539,87 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "filename": global_snap.get("filename"),
     }
+
+
+@app.get("/debug/optima/login-probe")
+async def debug_optima_login_probe(request: Request) -> Any:
+    """
+    Debug helper (does not affect auto refresh): perform Optima login POST and return metadata.
+    Password/key are never returned; only keys and selected non-sensitive fields.
+    """
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    if not (ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY):
+        return JSONResponse({"error": "auto_web_login_not_configured"}, status_code=500)
+
+    ua = ITIGRIS_WEB_USER_AGENT or "Mozilla/5.0"
+    company_uuid = REMAINGOODS_WEB_COMPANY_UUID or APP_NAME
+    base_url = f"https://optima.itigris.ru/{APP_NAME}"
+
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
+        # Preflight GETs (browser-ish).
+        pre = []
+        for u in [f"{base_url}", f"{base_url}/login"]:
+            try:
+                r = await client.get(
+                    u,
+                    headers={
+                        "User-Agent": ua,
+                        "Accept": "text/html, */*; q=0.01",
+                        "Referer": base_url,
+                        "Origin": "https://optima.itigris.ru",
+                    },
+                )
+                pre.append({"url": u, "status": r.status_code, "set_cookie": bool(r.headers.get("set-cookie"))})
+            except Exception as exc:
+                pre.append({"url": u, "error": type(exc).__name__})
+
+        # Minimal login form (same as prod path).
+        login_form = {
+            "loginAction": "true",
+            "login": ITIGRIS_WEB_LOGIN,
+            "password": "__REDACTED__",
+            "key": "__REDACTED__",
+            "versionDesc": ITIGRIS_WEB_VERSION_DESC or "server",
+            "browserDesc": ITIGRIS_WEB_BROWSER_DESC or ua,
+            "userId": "",
+            "uuidValue": str(uuid.uuid4()),
+            "pageUUID": ITIGRIS_WEB_LOGIN_PAGE_UUID or "",
+            "companyUUID": company_uuid,
+        }
+        # Actual post uses real secrets.
+        real_post_form = dict(login_form)
+        real_post_form["password"] = ITIGRIS_WEB_PASSWORD
+        real_post_form["key"] = ITIGRIS_WEB_KEY
+
+        headers = {
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": base_url,
+            "Origin": "https://optima.itigris.ru",
+        }
+        try:
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=real_post_form, headers=headers)
+        except Exception as exc:
+            return JSONResponse({"error": "login_request_failed", "type": type(exc).__name__}, status_code=502)
+
+        body = resp.text or ""
+        has_token_self = ("tokenSelf" in body) and ("accessToken" in body)
+        set_cookie_present = bool(resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie"))
+        loc = resp.headers.get("location") or resp.headers.get("Location") or ""
+
+        return {
+            "login_post_url": ITIGRIS_WEB_LOGIN_URL,
+            "login_post_headers": headers,
+            "login_post_payload_sanitized": login_form,
+            "login_post_status": resp.status_code,
+            "login_post_set_cookie_present": set_cookie_present,
+            "login_post_location": loc or None,
+            "login_post_has_tokenSelf": has_token_self,
+            "login_post_body_snippet": body[:1500],
+            "preflight": pre,
+        }
 
 
 @app.get("/openapi.json", include_in_schema=False)
