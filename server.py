@@ -1892,9 +1892,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             body = resp.text or ""
             # 1) Bearer token mode (no cookies required)
             if (not login_set_cookie_present) and ("tokenSelf" in body) and ("accessToken" in body):
-                m = re.search(r'accessToken\\s*:\\s*\"([^\"]+)\"', body)
+                # Robust parse: allow whitespace/newlines, support both quote types.
+                m = re.search(r'accessToken\s*:\s*"([^"]+)"', body, flags=re.S)
                 if not m:
-                    m = re.search(r"accessToken\\s*:\\s*'([^']+)'", body)
+                    m = re.search(r"accessToken\s*:\s*'([^']+)'", body, flags=re.S)
                 access_token = (m.group(1).strip() if m else "")
                 if not access_token:
                     raise HTTPException(
