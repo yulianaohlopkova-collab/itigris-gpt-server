@@ -1720,6 +1720,42 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "encoded_pairs_prefix": encoded_body.split("&")[:60],
         }
 
+    async def _download_excel_export(client: httpx.AsyncClient, user_id: str, page_uuid: str) -> Optional[Tuple[str, bytes, httpx.Response]]:
+        """
+        Browser (HAR5) downloads the full report as .xls via GET /remainGoodsReport/reportPage?excelPage=true...
+        This appears to return full data when HTML is a truncated preview.
+        """
+        export_url = f"https://optima.itigris.ru/{APP_NAME}/remainGoodsReport/reportPage"
+        # Try the two variants observed in HAR (with/without excelPageStartPage=true).
+        variants = [
+            {"userId": user_id, "pageUUID": page_uuid, "notUUIDAction": "true", "excelPage": "true", "excelPageStartPage": "true"},
+            {"userId": user_id, "pageUUID": page_uuid, "notUUIDAction": "true", "excelPage": "true"},
+        ]
+        export_headers = {
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Referer": f"{base_url}",
+            "Origin": "https://optima.itigris.ru",
+        }
+        for params in variants:
+            try:
+                r = await client.get(export_url, params=params, headers=export_headers)
+            except Exception:
+                continue
+            if r.status_code != 200:
+                continue
+            ctype = (r.headers.get("content-type") or "").lower()
+            disp = (r.headers.get("content-disposition") or "")
+            if "excel" not in ctype and "ms-excel" not in ctype and "attachment" not in disp.lower():
+                # Not an export response.
+                continue
+            filename = "remainGoodsReport.xls"
+            m = re.search(r'filename=\"?([^\";]+)\"?', disp)
+            if m:
+                filename = m.group(1)
+            return filename, (r.content or b""), r
+        return None
+
     async def do_report_request(client: httpx.AsyncClient, user_id: str, page_uuid: str, uuid_value: str) -> httpx.Response:
         form = build_report_form(user_id=user_id, page_uuid=page_uuid, uuid_value=uuid_value)
         # Ensure multi-select fields (e.g. department) are encoded as repeated keys.
@@ -1837,30 +1873,42 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 },
             )
 
-        # If login returned 200 without redirect, it's almost always "bad credentials" or a blocked login page.
-        # We consider it a failure, unless the caller explicitly relies on env context (legacy fallback).
+        # If login returned 200 without Location, some Optima builds redirect via JS:
+        # window.location = "https://optima.itigris.ru/odl";
+        # Treat that as success and proceed with a GET to bootstrap cookies/context.
         if login_status == 200 and not login_location:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "auto_web_login_no_redirect",
-                    "status_code": login_status,
-                    "set_cookie_present": login_set_cookie_present,
-                    "body_snippet": (resp.text or "")[:1000],
-                    "sent_payload_meta": {
-                        "keys": sorted(list(login_form.keys())),
-                        "companyUUID": login_form.get("companyUUID"),
-                        "pageUUID_key_present": "pageUUID" in login_form,
-                        "uuidValue_key_present": "uuidValue" in login_form,
-                        "userId_key_present": "userId" in login_form,
-                        "pageUUID_nonempty": bool(login_form.get("pageUUID")),
-                        "uuidValue_nonempty": bool(login_form.get("uuidValue")),
-                        "userId_nonempty": bool(login_form.get("userId")),
-                        "versionDesc": login_form.get("versionDesc"),
-                        "browserDesc_present": bool(login_form.get("browserDesc")),
+            body = resp.text or ""
+            m = re.search(r'window\\.location\\s*=\\s*\"([^\"]+)\"', body)
+            if m:
+                location = m.group(1).strip()
+                try:
+                    await client.get(location, headers=web_headers)
+                except Exception:
+                    pass
+                # Continue; caller will probe main page and derive module contexts.
+                login_location = location
+            else:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_login_no_redirect",
+                        "status_code": login_status,
+                        "set_cookie_present": login_set_cookie_present,
+                        "body_snippet": body[:1000],
+                        "sent_payload_meta": {
+                            "keys": sorted(list(login_form.keys())),
+                            "companyUUID": login_form.get("companyUUID"),
+                            "pageUUID_key_present": "pageUUID" in login_form,
+                            "uuidValue_key_present": "uuidValue" in login_form,
+                            "userId_key_present": "userId" in login_form,
+                            "pageUUID_nonempty": bool(login_form.get("pageUUID")),
+                            "uuidValue_nonempty": bool(login_form.get("uuidValue")),
+                            "userId_nonempty": bool(login_form.get("userId")),
+                            "versionDesc": login_form.get("versionDesc"),
+                            "browserDesc_present": bool(login_form.get("browserDesc")),
+                        },
                     },
-                },
-            )
+                )
 
         location = login_location
         if location:
@@ -2288,6 +2336,26 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         "report_debug": ctx.get("_report_ctx"),
                     },
                 )
+
+            # Prefer full export (.xls) over HTML preview when possible.
+            # HAR shows export GET uses the *accountant reports* pageUUID (module_ctx.pageUUID),
+            # not the remainGoodsReport module pageUUID.
+            export_page_uuid = (module_ctx.get("pageUUID") or "").strip() or report_page_uuid
+            export = await _download_excel_export(client, user_id=report_user_id, page_uuid=export_page_uuid)
+            if export and export[1]:
+                export_filename, export_bytes, export_resp = export
+                # Parse .xls/.xlsx and continue; avoids truncated HTML preview.
+                parsed_rows: List[Dict[str, Any]] = []
+                try:
+                    low = export_filename.lower()
+                    if low.endswith(".xlsx") or "spreadsheetml" in (export_resp.headers.get("content-type") or "").lower():
+                        parsed_rows = parse_remain_goods_xlsx(export_bytes)
+                    else:
+                        parsed_rows = parse_remain_goods_xls(export_bytes)
+                except Exception:
+                    parsed_rows = []
+                if parsed_rows:
+                    return export_filename, parsed_rows
 
             # Browser behavior (HAR): even when prepareData=true returns 200/Success,
             # the subsequent final reportPage POST is sent with a *different* uuidValue.
