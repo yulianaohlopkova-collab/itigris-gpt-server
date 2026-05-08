@@ -2139,6 +2139,51 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         out["_debug"] = debug  # type: ignore[typeddict-item]
         return out
 
+    async def _bootstrap_accountant_reports_ctx(client: httpx.AsyncClient) -> Dict[str, str]:
+        """
+        After login, some sessions don't have a usable ctx (pageUUID/uuidValue/userId) in redirects.
+        Per user request: force a navigation into accountant reports start page and extract ctx there.
+        """
+        debug: Dict[str, Any] = {"steps": []}
+        sp_url = f"https://optima.itigris.ru/{APP_NAME}/reportsStart/startPageAccountant"
+        hdrs = {
+            "User-Agent": ua,
+            "Accept": "text/html, */*; q=0.01",
+            "Referer": f"https://optima.itigris.ru/{APP_NAME}",
+            "Origin": "https://optima.itigris.ru",
+        }
+        r = await client.get(sp_url, headers=hdrs, follow_redirects=True)
+        debug["steps"].append(
+            {"step": "startPageAccountant_direct", "status": r.status_code, "final_url": str(r.request.url)[:500]}
+        )
+        if r.status_code == 401:
+            debug["error"] = "startPageAccountant_401"
+            return {"_debug": debug}  # type: ignore[return-value]
+        if r.status_code != 200:
+            debug["error"] = "startPageAccountant_not_200"
+            return {"_debug": debug}  # type: ignore[return-value]
+
+        final_url = str(r.request.url)
+        parsed = urlparse(final_url)
+        qs = parse_qs(parsed.query)
+        out = {
+            "userId": (qs.get("userId") or [""])[0],
+            "pageUUID": (qs.get("pageUUID") or [""])[0],
+            "uuidValue": (qs.get("uuidValue") or [""])[0],
+            "companyUUID": company_uuid,
+        }
+        html_ctx = _extract_optima_ctx_from_text(r.text or "")
+        if html_ctx.get("pageUUID"):
+            out["pageUUID"] = html_ctx.get("pageUUID") or out["pageUUID"]
+        if html_ctx.get("uuidValue"):
+            out["uuidValue"] = html_ctx.get("uuidValue") or out["uuidValue"]
+        if html_ctx.get("userId"):
+            out["userId"] = html_ctx.get("userId") or out["userId"]
+        debug["ctx_from_final_url"] = {k: (out.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]}
+        debug["ctx_from_html"] = {k: (html_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]}
+        out["_debug"] = debug  # type: ignore[typeddict-item]
+        return out
+
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
         # Preferred: server-side login to get fresh session.
         if ITIGRIS_WEB_LOGIN and ITIGRIS_WEB_PASSWORD and ITIGRIS_WEB_KEY:
@@ -2152,10 +2197,28 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # 0) Initialize navigation context for reports as seen in HAR.
             # This yields the correct seed pageUUID/uuidValue expected by remainGoodsReport/startPage.
             module_ctx: Dict[str, str] = {}
-            try:
-                module_ctx = await _init_accountant_reports_ctx(client, ctx)
-            except Exception:
-                module_ctx = {}
+            # Per user: force-start accountant module and extract ctx; retry login once if 401.
+            for attempt in range(1, 3):
+                try:
+                    module_ctx = await _bootstrap_accountant_reports_ctx(client)
+                except Exception:
+                    module_ctx = {}
+                if (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
+                    break
+                if module_ctx.get("_debug", {}).get("error") == "startPageAccountant_401" and attempt == 1:
+                    ctx = await login_and_get_context(client)
+                    continue
+                break
+
+            # If we still don't have a usable module ctx, do not continue.
+            if not (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_module_ctx_missing",
+                        "module_ctx": module_ctx,
+                    },
+                )
 
             report_seed_page_uuid = (
                 (module_ctx.get("pageUUID") or "").strip()
