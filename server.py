@@ -2400,6 +2400,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 raise HTTPException(status_code=502, detail={"error": "auto_web_missing_user_id_for_reports"})
 
             # Deterministic ctx discovery after login (cookie-only).
+            dbg = ctx.get("_debug") or {}
+            dbg["ctx_discovery_started"] = True
+            ctx["_debug"] = dbg  # type: ignore[typeddict-item]
             discovered = await _discover_ctx_after_login(client, ctx)
             discovered_ctx = (discovered.get("ctx") or {})
             if discovered_ctx:
@@ -2408,6 +2411,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # Attach discovery debug for troubleshooting.
             dbg = ctx.get("_debug") or {}
             dbg["ctx_discovery"] = discovered.get("debug") or {}
+            dbg["ctx_discovery_finished"] = True
+            try:
+                dbg["ctx_discovery_urls_count"] = len((dbg.get("ctx_discovery") or {}).get("probes") or [])
+            except Exception:
+                dbg["ctx_discovery_urls_count"] = None
             ctx["_debug"] = dbg  # type: ignore[typeddict-item]
 
             # 0) Initialize navigation context for reports as seen in HAR.
@@ -2433,6 +2441,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     detail={
                         "error": "auto_web_module_ctx_missing",
                         "module_ctx": module_ctx,
+                        "login_debug": ctx.get("_debug"),
                     },
                 )
 
