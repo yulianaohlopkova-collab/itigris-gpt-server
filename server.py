@@ -1648,8 +1648,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         "Origin": "https://optima.itigris.ru",
     }
 
-    # NOTE: Legacy Optima HTML reports flow uses cookie-based auth.
-    # We intentionally do NOT send Authorization: Bearer headers in this pipeline.
+    # Legacy Optima HTML reports flow uses cookie-based auth.
+    # (Keep helper for historical reasons; currently unused.)
     def _maybe_add_bearer(headers: Dict[str, str], ctx: Dict[str, str]) -> Dict[str, str]:
         return headers
 
@@ -1881,21 +1881,13 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "companyUUID": company_uuid,
         }
 
-        # Use navigation-like headers (no X-Requested-With). Some Optima builds return tokenSelf
-        # (API auth) when the login is treated as XHR; legacy HTML reports require cookie auth.
-        login_headers = {
-            "User-Agent": ua,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": f"https://optima.itigris.ru/{APP_NAME}",
-            "Origin": "https://optima.itigris.ru",
-        }
-
-        # We want to capture redirect params from Location.
+        # Baseline (known-working): perform login POST using web_headers (XHR-like) and capture redirect
+        # params from Location. Legacy HTML reports require the redirect-based cookie session.
         try:
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=login_headers, follow_redirects=False)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=web_headers, follow_redirects=False)
         except TypeError:
             # Older httpx: follow_redirects is client-level only.
-            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=login_headers)
+            resp = await client.post(ITIGRIS_WEB_LOGIN_URL, data=login_form, headers=web_headers)
 
         login_status = resp.status_code
         login_location = resp.headers.get("location") or resp.headers.get("Location") or ""
@@ -1925,78 +1917,30 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 },
             )
 
-        # If login returned 200 without Location, some Optima builds redirect via JS:
-        # window.location = "https://optima.itigris.ru/odl";
-        # Newer builds may return tokenSelf { accessToken, refreshToken } without setting cookies.
-        # Both are SUCCESSFUL logins per user reports.
+        # Baseline behavior: if login returned 200 without redirect Location, treat as failure.
+        # (Usually means bad credentials or a blocked login page.)
         if login_status == 200 and not login_location:
-            body = resp.text or ""
-            # 1) Bearer token mode (no cookies required)
-            if (not login_set_cookie_present) and ("tokenSelf" in body) and ("accessToken" in body):
-                # Robust parse: allow whitespace/newlines, support both quote types.
-                m = re.search(r'accessToken\s*:\s*"([^"]+)"', body, flags=re.S)
-                if not m:
-                    m = re.search(r"accessToken\s*:\s*'([^']+)'", body, flags=re.S)
-                access_token = (m.group(1).strip() if m else "")
-                if not access_token:
-                    raise HTTPException(
-                        status_code=502,
-                        detail={
-                            "error": "auto_web_login_token_parse_failed",
-                            "status_code": login_status,
-                            "body_snippet": body[:1200],
-                        },
-                    )
-                raise HTTPException(
-                    status_code=502,
-                    detail={
-                        "error": "auto_web_legacy_cookie_login_failed",
-                        "message": "Optima returned tokenSelf/accessToken but legacy HTML reports require cookie auth.",
-                        "status_code": login_status,
-                        "body_snippet": body[:1200],
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "auto_web_login_no_redirect",
+                    "status_code": login_status,
+                    "set_cookie_present": login_set_cookie_present,
+                    "body_snippet": (resp.text or "")[:1000],
+                    "sent_payload_meta": {
+                        "keys": sorted(list(login_form.keys())),
+                        "companyUUID": login_form.get("companyUUID"),
+                        "pageUUID_key_present": "pageUUID" in login_form,
+                        "uuidValue_key_present": "uuidValue" in login_form,
+                        "userId_key_present": "userId" in login_form,
+                        "pageUUID_nonempty": bool(login_form.get("pageUUID")),
+                        "uuidValue_nonempty": bool(login_form.get("uuidValue")),
+                        "userId_nonempty": bool(login_form.get("userId")),
+                        "versionDesc": login_form.get("versionDesc"),
+                        "browserDesc_present": bool(login_form.get("browserDesc")),
                     },
-                )
-
-            # 2) Cookie + JS redirect mode
-            if login_set_cookie_present and "window.location" in body:
-                # Support both single and double quotes (and possible window.location.href).
-                m = re.search(r"window\\.location(?:\\.href)?\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]", body)
-                location = (m.group(1).strip() if m else "")
-                # Fallback: find the first absolute /odl URL.
-                if not location:
-                    m2 = re.search(r"(https?://optima\\.itigris\\.ru/odl[^'\\\"\\s;]*)", body)
-                    location = (m2.group(1).strip() if m2 else "")
-                if location:
-                    try:
-                        await client.get(location, headers=web_headers)
-                    except Exception:
-                        pass
-                    login_location = location
-                else:
-                    # Still treat as success; caller will probe main page next.
-                    login_location = f"https://optima.itigris.ru/{APP_NAME}"
-            else:
-                raise HTTPException(
-                    status_code=502,
-                    detail={
-                        "error": "auto_web_login_no_redirect",
-                        "status_code": login_status,
-                        "set_cookie_present": login_set_cookie_present,
-                        "body_snippet": body[:1000],
-                        "sent_payload_meta": {
-                            "keys": sorted(list(login_form.keys())),
-                            "companyUUID": login_form.get("companyUUID"),
-                            "pageUUID_key_present": "pageUUID" in login_form,
-                            "uuidValue_key_present": "uuidValue" in login_form,
-                            "userId_key_present": "userId" in login_form,
-                            "pageUUID_nonempty": bool(login_form.get("pageUUID")),
-                            "uuidValue_nonempty": bool(login_form.get("uuidValue")),
-                            "userId_nonempty": bool(login_form.get("userId")),
-                            "versionDesc": login_form.get("versionDesc"),
-                            "browserDesc_present": bool(login_form.get("browserDesc")),
-                        },
-                    },
-                )
+                },
+            )
 
         location = login_location
         if location:
