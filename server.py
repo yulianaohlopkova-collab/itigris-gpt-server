@@ -1971,18 +1971,65 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     # Browser (HAR6) performs a userStart navigation with pageUUID/uuidValue even when
                     # login ultimately lands on /odl. This appears to initialize the legacy page context
                     # used by menu/openMenuElement and reportsStart/startPageAccountant.
+                    user_start_url = (
+                        f"https://optima.itigris.ru/{APP_NAME}/login/userStart"
+                        f"?pageUUID={quote(extracted_page_uuid)}"
+                        f"&userId={quote(extracted_user_id or '')}"
+                        f"&uuidValue={quote(extracted_uuid_value)}"
+                        f"&companyUUID={quote(company_uuid)}"
+                        f"&loginAction=true"
+                    )
+                    user_start_debug: Dict[str, Any] = {
+                        "attempted": True,
+                        "userStart_url": user_start_url,
+                        "params": {
+                            "pageUUID": extracted_page_uuid,
+                            "uuidValue": extracted_uuid_value,
+                            "userId": extracted_user_id or "",
+                            "companyUUID": company_uuid,
+                            "loginAction": "true",
+                        },
+                        "cookie_before": {},
+                    }
                     try:
-                        user_start_url = (
-                            f"https://optima.itigris.ru/{APP_NAME}/login/userStart"
-                            f"?pageUUID={quote(extracted_page_uuid)}"
-                            f"&userId={quote(extracted_user_id or '')}"
-                            f"&uuidValue={quote(extracted_uuid_value)}"
-                            f"&companyUUID={quote(company_uuid)}"
-                            f"&loginAction=true"
-                        )
-                        await client.get(user_start_url, headers=web_headers)
+                        user_start_debug["cookie_before"] = {c.name: c.value for c in client.cookies.jar}  # type: ignore[attr-defined]
                     except Exception:
-                        pass
+                        user_start_debug["cookie_before"] = {}
+
+                    if not extracted_page_uuid:
+                        user_start_debug["skipped_reason"] = "missing_extracted_pageUUID"
+                    elif not extracted_uuid_value:
+                        user_start_debug["skipped_reason"] = "missing_extracted_uuidValue"
+                    else:
+                        try:
+                            us_headers, us_eff_cookie = _ensure_cookie_header(web_headers, client)
+                            r_us = await client.get(user_start_url, headers=us_headers, follow_redirects=True)
+                            us_final = str(r_us.request.url)
+                            us_text = r_us.text or ""
+                            # Extract ctx from final_url + html
+                            us_qs = parse_qs(urlparse(us_final).query)
+                            us_url_ctx = {
+                                "userId": (us_qs.get("userId") or [""])[0],
+                                "pageUUID": (us_qs.get("pageUUID") or [""])[0],
+                                "uuidValue": (us_qs.get("uuidValue") or [""])[0],
+                            }
+                            us_html_ctx = _extract_optima_ctx_from_text(us_text)
+                            user_start_debug.update(
+                                {
+                                    "status": r_us.status_code,
+                                    "final_url": us_final,
+                                    "effective_cookie_header_sent": us_eff_cookie,
+                                    "ctx_from_final_url": {k: (us_url_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                                    "ctx_from_html": {k: (us_html_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                                    "body_snippet": (us_text[:1200] if us_text else None),
+                                }
+                            )
+                        except Exception as e:
+                            user_start_debug.update({"error": type(e).__name__, "message": str(e)[:400]})
+                    try:
+                        user_start_debug["cookie_after"] = {c.name: c.value for c in client.cookies.jar}  # type: ignore[attr-defined]
+                    except Exception:
+                        user_start_debug["cookie_after"] = {}
                     # Browser-like: immediately probe /odl after redirect to let the session "settle".
                     try:
                         r_main = await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
@@ -1993,7 +2040,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                             "len": len(main_text),
                             "snippet": (main_text[:1200] if main_text else None),
                             "cookie_header": _cookie_header_from_client(client),
-                            "userStart_url": user_start_url,
+                            "userStart_debug": user_start_debug,
                         }
                     except Exception:
                         pass
@@ -2510,7 +2557,9 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             # 0) Initialize navigation context for reports as seen in HAR.
             # This yields the correct seed pageUUID/uuidValue expected by remainGoodsReport/startPage.
             module_ctx: Dict[str, str] = {}
-            # Per user: force-start accountant module and extract ctx; retry login once if 401.
+            cookie_snapshot_before_bootstrap = {"cookie_header": _cookie_header_from_client(client)}
+            # Per user: force-start accountant module and extract ctx.
+            # IMPORTANT: do NOT re-login after ctx discovery, to avoid mixing sessions (JSESSIONID changes).
             for attempt in range(1, 3):
                 try:
                     module_ctx = await _bootstrap_accountant_reports_ctx(client, ctx)
@@ -2518,9 +2567,6 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     module_ctx = {}
                 if (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
                     break
-                if module_ctx.get("_debug", {}).get("error") == "startPageAccountant_401" and attempt == 1:
-                    ctx = await login_and_get_context(client)
-                    continue
                 break
 
             # If we still don't have a usable module ctx, do not continue.
@@ -2533,6 +2579,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         "login_debug": ctx.get("_debug"),
                         "ctx_debug_keys_before_bootstrap": ctx_debug_keys_before_bootstrap,
                         "ctx_discovery_present_before_bootstrap": ctx_discovery_present_before_bootstrap,
+                        "cookie_snapshot_before_bootstrap": cookie_snapshot_before_bootstrap,
                         # Use the snapshot from immediately after discovery, because ctx may be replaced
                         # inside the bootstrap retry loop (login retry on 401).
                         "ctx_discovery": debug_ctx_before_bootstrap.get("ctx_discovery"),
