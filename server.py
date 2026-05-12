@@ -425,6 +425,7 @@ _last_remain_goods_html_parse_debug: Optional[Dict[str, Any]] = None
 _last_remain_goods_web_form_debug: Optional[Dict[str, Any]] = None  # legacy single-phase
 _last_remain_goods_web_form_debug_phases: Dict[str, Any] = {}
 _last_remain_goods_web_http_debug_phases: Dict[str, Any] = {}
+_last_remain_goods_configured_cookie_debug: Dict[str, Any] = {}
 _contactlenses_auto_fetch_state: Dict[str, Any] = {
     "last_attempt_unix": None,
     "last_success_unix": None,
@@ -1712,6 +1713,43 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Preserve order for diffing.
         return "; ".join(parts)
 
+    def _apply_configured_cookie(client: httpx.AsyncClient, cookie_header: str) -> None:
+        """
+        Ensure configured Cookie header is actually sent and visible in debug.
+        httpx's cookie jar doesn't automatically reflect client.headers["Cookie"], so we set both.
+        """
+        global _last_remain_goods_configured_cookie_debug
+        raw = (cookie_header or "").strip()
+        if not raw:
+            _last_remain_goods_configured_cookie_debug = {"configured_cookie_present": False}
+            return
+
+        # 1) Always send as a raw Cookie header.
+        client.headers.update({"Cookie": raw})
+
+        # 2) Also populate cookie jar so downstream debug (and some requests) see them.
+        names: List[str] = []
+        for part in raw.split(";"):
+            part = part.strip()
+            if not part or "=" not in part:
+                continue
+            name, value = part.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if not name:
+                continue
+            names.append(name)
+            try:
+                client.cookies.set(name, value, domain="optima.itigris.ru", path="/")
+            except Exception:
+                # Best-effort; header is still set.
+                pass
+
+        _last_remain_goods_configured_cookie_debug = {
+            "configured_cookie_present": True,
+            "configured_cookie_names": sorted(list(set(names))),
+        }
+
     def _store_http_debug(phase: str, url: str, headers: Dict[str, str], encoded_body: str, client: httpx.AsyncClient) -> None:
         global _last_remain_goods_web_http_debug_phases
         # Keep it JSON-friendly and stable for 1:1 diff against HAR.
@@ -2202,6 +2240,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "status": r.status_code,
                 "final_url": str(r.request.url)[:500],
                 "sent_headers": hdrs,
+                "client_cookie_header": (client.headers.get("Cookie") or ""),
                 "cookie_header": _cookie_header_from_client(client),
                 "bootstrap": None,
             }
@@ -2238,7 +2277,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Rollback safety: if a static cookie + context is configured, prefer it.
         # This was the last known stable way to fetch legacy HTML reports when web login behavior changes.
         if REMAINGOODS_WEB_COOKIE and REMAINGOODS_WEB_USER_ID and REMAINGOODS_WEB_PAGE_UUID and REMAINGOODS_WEB_UUID_VALUE:
-            client.headers.update({"Cookie": REMAINGOODS_WEB_COOKIE})
+            _apply_configured_cookie(client, REMAINGOODS_WEB_COOKIE)
             resp = await do_report_request(client, REMAINGOODS_WEB_USER_ID, REMAINGOODS_WEB_PAGE_UUID, REMAINGOODS_WEB_UUID_VALUE)
             if resp.status_code == 200:
                 try:
@@ -2719,6 +2758,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "web_form_debug": _last_remain_goods_web_form_debug,
         "web_form_debug_phases": _last_remain_goods_web_form_debug_phases,
         "web_http_debug_phases": _last_remain_goods_web_http_debug_phases,
+        "configured_cookie_debug": _last_remain_goods_configured_cookie_debug,
     }
 
     _contactlenses_auto_fetch_state["last_success_unix"] = now
@@ -3536,6 +3576,7 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
         "web_form_debug": global_snap.get("web_form_debug"),
         "web_form_debug_phases": global_snap.get("web_form_debug_phases"),
         "web_http_debug_phases": global_snap.get("web_http_debug_phases"),
+        "configured_cookie_debug": global_snap.get("configured_cookie_debug"),
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "filename": global_snap.get("filename"),
     }
