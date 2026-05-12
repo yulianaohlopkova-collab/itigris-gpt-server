@@ -1954,6 +1954,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # If login returned 200 without redirect Location, some Optima builds redirect via JS:
         #   window.location = "https://optima.itigris.ru/odl";
         # In legacy cookie mode this is still a successful login when Set-Cookie is present.
+        post_login_main_probe: Optional[Dict[str, Any]] = None
         if login_status == 200 and not login_location:
             body = resp.text or ""
             if login_set_cookie_present and ("window.location" in body):
@@ -1967,6 +1968,19 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         pass
                     # Proceed as if we had a normal redirect location.
                     login_location = js_url
+                    # Browser-like: immediately probe /odl after redirect to let the session "settle".
+                    try:
+                        r_main = await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
+                        main_text = r_main.text or ""
+                        post_login_main_probe = {
+                            "status": r_main.status_code,
+                            "final_url": str(r_main.request.url),
+                            "len": len(main_text),
+                            "snippet": (main_text[:1200] if main_text else None),
+                            "cookie_header": _cookie_header_from_client(client),
+                        }
+                    except Exception:
+                        pass
                 else:
                     # Still proceed; we'll probe the main page for ctx.
                     login_location = f"https://optima.itigris.ru/{APP_NAME}"
@@ -2067,6 +2081,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "final_cookie_header_after_login": _cookie_header_from_client(client),
                 }
             )
+            if post_login_main_probe:
+                dbg["post_login_main_probe"] = post_login_main_probe
             ctx["_debug"] = dbg  # type: ignore[typeddict-item]
             return ctx
 
@@ -2272,6 +2288,84 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         out["_debug"] = debug  # type: ignore[typeddict-item]
         return out
 
+    async def _discover_ctx_after_login(client: httpx.AsyncClient, base_ctx: Dict[str, str]) -> Dict[str, Any]:
+        """
+        Deterministic cookie-only ctx discovery after login.
+        We probe a small browser-like sequence of URLs and attempt to extract userId/pageUUID/uuidValue
+        from BOTH the final URL (query params) and HTML/JS (updateMainPageData*).
+        Returns {"ctx": {...}, "debug": {...}}. "ctx" may be empty if not found.
+        """
+        debug: Dict[str, Any] = {"probes": []}
+
+        def _ctx_from_url(u: str) -> Dict[str, str]:
+            try:
+                parsed = urlparse(u)
+                qs = parse_qs(parsed.query)
+                return {
+                    "userId": (qs.get("userId") or [""])[0],
+                    "pageUUID": (qs.get("pageUUID") or [""])[0],
+                    "uuidValue": (qs.get("uuidValue") or [""])[0],
+                    "companyUUID": (qs.get("companyUUID") or [company_uuid])[0] or company_uuid,
+                }
+            except Exception:
+                return {}
+
+        def _merge(best: Dict[str, str], cand: Dict[str, str]) -> Dict[str, str]:
+            out = dict(best)
+            for k in ["userId", "pageUUID", "uuidValue", "companyUUID"]:
+                v = (cand.get(k) or "").strip()
+                if v:
+                    out[k] = v
+            return out
+
+        # Start with what login gave us (might be empty for JS-redirect logins).
+        best: Dict[str, str] = {
+            "userId": (base_ctx.get("userId") or "").strip(),
+            "pageUUID": (base_ctx.get("pageUUID") or "").strip(),
+            "uuidValue": (base_ctx.get("uuidValue") or "").strip(),
+            "companyUUID": (base_ctx.get("companyUUID") or company_uuid).strip() or company_uuid,
+        }
+
+        probe_urls = [
+            f"https://optima.itigris.ru/{APP_NAME}",
+            f"https://optima.itigris.ru/{APP_NAME}/",
+            f"https://optima.itigris.ru/{APP_NAME}/startPageAccountant",
+            f"https://optima.itigris.ru/{APP_NAME}/reportsStart/startPageAccountant",
+        ]
+
+        for u in probe_urls:
+            try:
+                hdrs, eff_cookie = _ensure_cookie_header(web_headers, client)
+                r = await client.get(u, headers=hdrs, follow_redirects=True)
+                final_url = str(r.request.url)
+                html_text = r.text or ""
+                url_ctx = _ctx_from_url(final_url)
+                html_ctx = _extract_optima_ctx_from_text(html_text)
+                cand = _merge(url_ctx, html_ctx)
+                best = _merge(best, cand)
+                debug["probes"].append(
+                    {
+                        "url": u,
+                        "status": r.status_code,
+                        "final_url": final_url[:500],
+                        "effective_cookie_header_sent": eff_cookie,
+                        "ctx_from_final_url": {k: (url_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                        "ctx_from_html": {k: (html_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                        "best_so_far": {k: (best.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                        "body_snippet": (html_text[:800] if html_text else None),
+                    }
+                )
+                if (best.get("pageUUID") and best.get("uuidValue") and best.get("userId")):
+                    break
+            except Exception as e:
+                debug["probes"].append({"url": u, "error": type(e).__name__, "message": str(e)[:300]})
+                continue
+
+        # If we found ctx, return it.
+        if (best.get("pageUUID") and best.get("uuidValue") and best.get("userId")):
+            return {"ctx": best, "debug": debug}
+        return {"ctx": {}, "debug": debug}
+
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
         # Rollback safety: if a static cookie + context is configured, prefer it.
         # This was the last known stable way to fetch legacy HTML reports when web login behavior changes.
@@ -2304,6 +2398,17 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             report_user_id = (ITIGRIS_WEB_USER_ID or ctx.get("userId") or REMAINGOODS_WEB_USER_ID or "").strip()
             if not report_user_id:
                 raise HTTPException(status_code=502, detail={"error": "auto_web_missing_user_id_for_reports"})
+
+            # Deterministic ctx discovery after login (cookie-only).
+            discovered = await _discover_ctx_after_login(client, ctx)
+            discovered_ctx = (discovered.get("ctx") or {})
+            if discovered_ctx:
+                # Merge discovered ctx into login ctx for downstream steps.
+                ctx = {**ctx, **discovered_ctx}
+            # Attach discovery debug for troubleshooting.
+            dbg = ctx.get("_debug") or {}
+            dbg["ctx_discovery"] = discovered.get("debug") or {}
+            ctx["_debug"] = dbg  # type: ignore[typeddict-item]
 
             # 0) Initialize navigation context for reports as seen in HAR.
             # This yields the correct seed pageUUID/uuidValue expected by remainGoodsReport/startPage.
