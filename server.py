@@ -1968,6 +1968,21 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         pass
                     # Proceed as if we had a normal redirect location.
                     login_location = js_url
+                    # Browser (HAR6) performs a userStart navigation with pageUUID/uuidValue even when
+                    # login ultimately lands on /odl. This appears to initialize the legacy page context
+                    # used by menu/openMenuElement and reportsStart/startPageAccountant.
+                    try:
+                        user_start_url = (
+                            f"https://optima.itigris.ru/{APP_NAME}/login/userStart"
+                            f"?pageUUID={quote(extracted_page_uuid)}"
+                            f"&userId={quote(extracted_user_id or '')}"
+                            f"&uuidValue={quote(extracted_uuid_value)}"
+                            f"&companyUUID={quote(company_uuid)}"
+                            f"&loginAction=true"
+                        )
+                        await client.get(user_start_url, headers=web_headers)
+                    except Exception:
+                        pass
                     # Browser-like: immediately probe /odl after redirect to let the session "settle".
                     try:
                         r_main = await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
@@ -1978,6 +1993,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                             "len": len(main_text),
                             "snippet": (main_text[:1200] if main_text else None),
                             "cookie_header": _cookie_header_from_client(client),
+                            "userStart_url": user_start_url,
                         }
                     except Exception:
                         pass
