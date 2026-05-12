@@ -1917,30 +1917,47 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 },
             )
 
-        # Baseline behavior: if login returned 200 without redirect Location, treat as failure.
-        # (Usually means bad credentials or a blocked login page.)
+        # If login returned 200 without redirect Location, some Optima builds redirect via JS:
+        #   window.location = "https://optima.itigris.ru/odl";
+        # In legacy cookie mode this is still a successful login when Set-Cookie is present.
         if login_status == 200 and not login_location:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "auto_web_login_no_redirect",
-                    "status_code": login_status,
-                    "set_cookie_present": login_set_cookie_present,
-                    "body_snippet": (resp.text or "")[:1000],
-                    "sent_payload_meta": {
-                        "keys": sorted(list(login_form.keys())),
-                        "companyUUID": login_form.get("companyUUID"),
-                        "pageUUID_key_present": "pageUUID" in login_form,
-                        "uuidValue_key_present": "uuidValue" in login_form,
-                        "userId_key_present": "userId" in login_form,
-                        "pageUUID_nonempty": bool(login_form.get("pageUUID")),
-                        "uuidValue_nonempty": bool(login_form.get("uuidValue")),
-                        "userId_nonempty": bool(login_form.get("userId")),
-                        "versionDesc": login_form.get("versionDesc"),
-                        "browserDesc_present": bool(login_form.get("browserDesc")),
+            body = resp.text or ""
+            if login_set_cookie_present and ("window.location" in body):
+                # Support both window.location and window.location.href; both quote types; allow whitespace/newlines.
+                m = re.search(r"window\\.location(?:\\.href)?\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]", body, flags=re.S)
+                js_url = (m.group(1).strip() if m else "")
+                if js_url:
+                    try:
+                        await client.get(js_url, headers=web_headers)
+                    except Exception:
+                        pass
+                    # Proceed as if we had a normal redirect location.
+                    login_location = js_url
+                else:
+                    # Still proceed; we'll probe the main page for ctx.
+                    login_location = f"https://optima.itigris.ru/{APP_NAME}"
+            else:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_web_login_no_redirect",
+                        "status_code": login_status,
+                        "set_cookie_present": login_set_cookie_present,
+                        "body_snippet": (body or "")[:1000],
+                        "sent_payload_meta": {
+                            "keys": sorted(list(login_form.keys())),
+                            "companyUUID": login_form.get("companyUUID"),
+                            "pageUUID_key_present": "pageUUID" in login_form,
+                            "uuidValue_key_present": "uuidValue" in login_form,
+                            "userId_key_present": "userId" in login_form,
+                            "pageUUID_nonempty": bool(login_form.get("pageUUID")),
+                            "uuidValue_nonempty": bool(login_form.get("uuidValue")),
+                            "userId_nonempty": bool(login_form.get("userId")),
+                            "versionDesc": login_form.get("versionDesc"),
+                            "browserDesc_present": bool(login_form.get("browserDesc")),
+                        },
                     },
-                },
-            )
+                )
 
         location = login_location
         if location:
