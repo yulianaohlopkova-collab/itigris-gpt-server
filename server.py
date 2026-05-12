@@ -2361,6 +2361,74 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 debug["probes"].append({"url": u, "error": type(e).__name__, "message": str(e)[:300]})
                 continue
 
+        # If still missing ctx, try the browser-like menu bootstrap chain (HAR):
+        # POST /menu/openMenuElement?menuItem=accountantReports
+        # -> GET openMenuElement2 (from Location)
+        # -> GET reportsStart/startPageAccountant (from Location)
+        #
+        # This chain requires userId + pageUUID + uuidValue. If HTML didn't provide it, use configured
+        # install-level context as deterministic fallback.
+        if not (best.get("pageUUID") and best.get("uuidValue") and best.get("userId")):
+            fallback_user_id = (ITIGRIS_WEB_USER_ID or "").strip()
+            fallback_page_uuid = (ITIGRIS_WEB_PAGE_UUID or ITIGRIS_WEB_LOGIN_PAGE_UUID or "").strip()
+            if fallback_user_id and fallback_page_uuid:
+                best = _merge(best, {"userId": fallback_user_id, "pageUUID": fallback_page_uuid, "uuidValue": str(uuid.uuid4())})
+                try:
+                    open1_url = f"https://optima.itigris.ru/{APP_NAME}/menu/openMenuElement?menuItem=accountantReports"
+                    payload = {"userId": best["userId"], "pageUUID": best["pageUUID"], "uuidValue": best["uuidValue"], "companyUUID": company_uuid}
+                    menu_headers = dict(web_headers)
+                    menu_headers["Accept"] = "text/html, */*; q=0.01"
+                    menu_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+                    menu_headers, eff_cookie = _ensure_cookie_header(menu_headers, client)
+                    r1 = await client.post(open1_url, data=payload, headers=menu_headers, follow_redirects=False)
+                    loc1 = (r1.headers.get("location") or r1.headers.get("Location") or "").strip()
+                    ctx_loc1 = _ctx_from_url(loc1) if loc1 else {}
+                    best = _merge(best, ctx_loc1)
+                    debug["probes"].append(
+                        {
+                            "url": open1_url,
+                            "status": r1.status_code,
+                            "final_url": None,
+                            "effective_cookie_header_sent": eff_cookie,
+                            "location": loc1[:500] if loc1 else None,
+                            "payload_meta": {"userId": best.get("userId"), "pageUUID": best.get("pageUUID"), "uuidValue": best.get("uuidValue")},
+                            "best_so_far": {k: (best.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                        }
+                    )
+                    if loc1:
+                        abs1 = urljoin(f"https://optima.itigris.ru/{APP_NAME}/", loc1.lstrip("/"))
+                        r2 = await client.get(abs1, headers=menu_headers, follow_redirects=False)
+                        loc2 = (r2.headers.get("location") or r2.headers.get("Location") or "").strip()
+                        ctx_loc2 = _ctx_from_url(loc2) if loc2 else {}
+                        best = _merge(best, ctx_loc2)
+                        debug["probes"].append(
+                            {
+                                "url": abs1,
+                                "status": r2.status_code,
+                                "location": loc2[:500] if loc2 else None,
+                                "best_so_far": {k: (best.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                            }
+                        )
+                        if loc2:
+                            abs2 = urljoin(f"https://optima.itigris.ru/{APP_NAME}/", loc2.lstrip("/"))
+                            r3 = await client.get(abs2, headers=menu_headers, follow_redirects=True)
+                            final_url = str(r3.request.url)
+                            url_ctx = _ctx_from_url(final_url)
+                            html_ctx = _extract_optima_ctx_from_text(r3.text or "")
+                            best = _merge(best, _merge(url_ctx, html_ctx))
+                            debug["probes"].append(
+                                {
+                                    "url": abs2,
+                                    "status": r3.status_code,
+                                    "final_url": final_url[:500],
+                                    "ctx_from_final_url": {k: (url_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                                    "ctx_from_html": {k: (html_ctx.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                                    "best_so_far": {k: (best.get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                                }
+                            )
+                except Exception as e:
+                    debug["probes"].append({"url": "menu_bootstrap", "error": type(e).__name__, "message": str(e)[:400]})
+
         # If we found ctx, return it.
         if (best.get("pageUUID") and best.get("uuidValue") and best.get("userId")):
             return {"ctx": best, "debug": debug}
