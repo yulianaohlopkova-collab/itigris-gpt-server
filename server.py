@@ -2486,6 +2486,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 dbg["ctx_discovery_urls_count"] = None
             ctx["_debug"] = dbg  # type: ignore[typeddict-item]
 
+            # Guard: prove in responses that discovery ran and was attached to the same ctx passed into bootstrap.
+            ctx_debug_keys_before_bootstrap = sorted(list((ctx.get("_debug") or {}).keys()))
+            ctx_discovery_present_before_bootstrap = bool((ctx.get("_debug") or {}).get("ctx_discovery"))
+
             # 0) Initialize navigation context for reports as seen in HAR.
             # This yields the correct seed pageUUID/uuidValue expected by remainGoodsReport/startPage.
             module_ctx: Dict[str, str] = {}
@@ -2510,6 +2514,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         "error": "auto_web_module_ctx_missing",
                         "module_ctx": module_ctx,
                         "login_debug": ctx.get("_debug"),
+                        "ctx_debug_keys_before_bootstrap": ctx_debug_keys_before_bootstrap,
+                        "ctx_discovery_present_before_bootstrap": ctx_discovery_present_before_bootstrap,
                     },
                 )
 
