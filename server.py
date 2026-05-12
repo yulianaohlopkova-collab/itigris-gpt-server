@@ -1713,6 +1713,20 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # Preserve order for diffing.
         return "; ".join(parts)
 
+    def _ensure_cookie_header(headers: Dict[str, str], client: httpx.AsyncClient) -> Tuple[Dict[str, str], str]:
+        """
+        httpx will store cookies in the jar, but we observed cases where requests go out without a Cookie header
+        even though the jar contains route/JSESSIONID. For legacy Optima endpoints, force-send Cookie.
+        Returns (headers, effective_cookie_header_sent).
+        """
+        hdrs = dict(headers)
+        effective = (hdrs.get("Cookie") or "").strip()
+        if not effective:
+            effective = (_cookie_header_from_client(client) or "").strip()
+            if effective:
+                hdrs["Cookie"] = effective
+        return hdrs, effective
+
     def _apply_configured_cookie(client: httpx.AsyncClient, cookie_header: str) -> None:
         """
         Ensure configured Cookie header is actually sent and visible in debug.
@@ -1758,6 +1772,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "url": url,
             "headers": hdrs,
             "cookie_header": _cookie_header_from_client(client),
+            "effective_cookie_header_sent": (headers.get("Cookie") or ""),
             "encoded_len": len(encoded_body),
             "encoded_body": encoded_body,
             "encoded_pairs_prefix": encoded_body.split("&")[:60],
@@ -1782,7 +1797,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         }
         for params in variants:
             try:
-                r = await client.get(export_url, params=params, headers=export_headers)
+                hdrs, _eff = _ensure_cookie_header(export_headers, client)
+                r = await client.get(export_url, params=params, headers=hdrs)
             except Exception:
                 continue
             if r.status_code != 200:
@@ -1807,6 +1823,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # HAR (final): text/html, */*; q=0.01
         req_headers["Accept"] = "text/html, */*; q=0.01"
         req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+        req_headers, _eff = _ensure_cookie_header(req_headers, client)
         _store_http_debug("final", url, req_headers, encoded, client)
         return await client.post(url, content=encoded, headers=req_headers)
 
@@ -2213,6 +2230,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "Referer": f"https://optima.itigris.ru/{APP_NAME}",
             "Origin": "https://optima.itigris.ru",
         }
+        hdrs, effective_cookie_header_sent = _ensure_cookie_header(hdrs, client)
         r = await client.get(sp_url, headers=hdrs, follow_redirects=True)
         debug["steps"].append(
             {
@@ -2220,6 +2238,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "status": r.status_code,
                 "final_url": str(r.request.url)[:500],
                 "sent_headers": hdrs,
+                "effective_cookie_header_sent": effective_cookie_header_sent,
                 "client_cookie_header": (client.headers.get("Cookie") or ""),
                 "cookie_header": _cookie_header_from_client(client),
                 "bootstrap": None,
@@ -2336,7 +2355,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "pageUUID": seed_page_uuid,
                     "companyUUID": company_uuid,
                 }
-                return await client.post(start_url, data=payload, headers=web_headers)
+                hdrs, _eff = _ensure_cookie_header(web_headers, client)
+                return await client.post(start_url, data=payload, headers=hdrs)
 
             # startPage expects the reports navigation context (HAR chain).
             preferred_seed_page_uuid = (
@@ -2537,6 +2557,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 }
                 api_headers = dict(web_headers)
                 api_headers["Accept"] = "text/html, */*; q=0.01"
+                api_headers, _eff = _ensure_cookie_header(api_headers, client)
                 await client.get(api_view_url, params=api_view_params, headers=api_headers)
             except Exception:
                 # Non-fatal; continue to final request.
