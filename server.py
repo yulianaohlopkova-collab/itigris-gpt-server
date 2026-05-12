@@ -1839,6 +1839,17 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         if not ITIGRIS_WEB_LOGIN or not ITIGRIS_WEB_PASSWORD or not ITIGRIS_WEB_KEY:
             raise HTTPException(status_code=500, detail="auto_web_login_not_configured")
 
+        # Ensure we don't mix a previously configured static cookie with a fresh login session.
+        # When we do a live login, we use ONLY the cookies issued by Optima during this flow.
+        try:
+            client.cookies.clear()
+        except Exception:
+            pass
+        try:
+            client.headers.pop("Cookie", None)
+        except Exception:
+            pass
+
         # Bootstrap cookies (JSESSIONID, route, etc.) and try to extract pageUUID/uuidValue if present.
         # In a real browser a GET to the app root happens before login.
         try:
@@ -1892,6 +1903,12 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         login_status = resp.status_code
         login_location = resp.headers.get("location") or resp.headers.get("Location") or ""
         login_set_cookie_present = bool(resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie"))
+        try:
+            login_set_cookie_values = resp.headers.get_list("set-cookie")
+        except Exception:
+            # Older httpx fallback
+            sc = resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie") or ""
+            login_set_cookie_values = [sc] if sc else []
 
         if login_status not in {200, 302, 303}:
             raise HTTPException(
@@ -2027,8 +2044,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 {
                     "login_status": login_status,
                     "login_location": location,
+                    "login_set_cookie_values": login_set_cookie_values[:10],
                     "userStart_ok": user_start_ok,
                     "cookie_names": cookie_names,
+                    "final_cookie_header_after_login": _cookie_header_from_client(client),
                 }
             )
             ctx["_debug"] = dbg  # type: ignore[typeddict-item]
