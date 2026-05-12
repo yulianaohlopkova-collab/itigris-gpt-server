@@ -2508,6 +2508,7 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
 
             # If we still don't have a usable module ctx, do not continue.
             if not (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
+                _dbg = (ctx.get("_debug") or {})
                 raise HTTPException(
                     status_code=502,
                     detail={
@@ -2516,6 +2517,10 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         "login_debug": ctx.get("_debug"),
                         "ctx_debug_keys_before_bootstrap": ctx_debug_keys_before_bootstrap,
                         "ctx_discovery_present_before_bootstrap": ctx_discovery_present_before_bootstrap,
+                        "ctx_discovery": _dbg.get("ctx_discovery"),
+                        "ctx_discovery_urls_count": _dbg.get("ctx_discovery_urls_count"),
+                        "ctx_discovery_started": _dbg.get("ctx_discovery_started"),
+                        "ctx_discovery_finished": _dbg.get("ctx_discovery_finished"),
                     },
                 )
 
