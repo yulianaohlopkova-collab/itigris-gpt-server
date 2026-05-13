@@ -3079,6 +3079,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "expires_at_unix": expires,
         "filename": resolved_filename,
         "rows_count": len(rows),
+        "rows": rows,
         "overall_summary": overall,
         "by_department": by_dep,
         "parse_debug": _last_remain_goods_html_parse_debug,
@@ -3735,6 +3736,7 @@ async def contactlenses_remain_goods_report_snapshot_set_global(
         "expires_at_unix": expires,
         "filename": body.filename,
         "rows_count": len(rows),
+        "rows": rows,
         "overall_summary": overall,
         "by_department": by_dep,
     }
@@ -3907,6 +3909,33 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "filename": global_snap.get("filename"),
     }
+
+
+@app.get("/contactlenses/remainGoodsReport/snapshot")
+async def contactlenses_remain_goods_report_snapshot_get(request: Request, include_rows: bool = True) -> Any:
+    """
+    Read the current global remainGoodsReport snapshot (rows + summary + metadata).
+    """
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    global_snap = get_global_snapshot()
+    if not global_snap:
+        return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
+    deps = sorted(list((global_snap.get("by_department") or {}).keys()))
+    out: Dict[str, Any] = {
+        "ok": True,
+        "filename": global_snap.get("filename"),
+        "stored_at_unix": global_snap.get("stored_at_unix"),
+        "expires_at_unix": global_snap.get("expires_at_unix"),
+        "departments": deps,
+        "departments_count": len(deps),
+        "rows_count": int(global_snap.get("rows_count") or 0),
+        "overall_summary": global_snap.get("overall_summary") or {},
+    }
+    if include_rows:
+        out["rows"] = list(global_snap.get("rows") or [])
+    return out
 
 
 @app.get("/debug/optima/login-probe")
