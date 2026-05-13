@@ -2618,14 +2618,24 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             cookie_snapshot_before_bootstrap = {"cookie_header": _cookie_header_from_client(client)}
             # Per user: force-start accountant module and extract ctx.
             # IMPORTANT: do NOT re-login after ctx discovery, to avoid mixing sessions (JSESSIONID changes).
-            for attempt in range(1, 3):
-                try:
-                    module_ctx = await _bootstrap_accountant_reports_ctx(client, ctx)
-                except Exception:
-                    module_ctx = {}
-                if (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
+            # If ctx discovery already produced a full ctx (via menu bootstrap chain), use it directly.
+            if (ctx.get("pageUUID") and ctx.get("uuidValue") and ctx.get("userId")):
+                module_ctx = {
+                    "userId": (ctx.get("userId") or "").strip(),
+                    "pageUUID": (ctx.get("pageUUID") or "").strip(),
+                    "uuidValue": (ctx.get("uuidValue") or "").strip(),
+                    "companyUUID": company_uuid,
+                    "_debug": {"source": "ctx_discovery_merge"},
+                }
+            else:
+                for attempt in range(1, 3):
+                    try:
+                        module_ctx = await _bootstrap_accountant_reports_ctx(client, ctx)
+                    except Exception:
+                        module_ctx = {}
+                    if (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
+                        break
                     break
-                break
 
             # If we still don't have a usable module ctx, do not continue.
             if not (module_ctx.get("pageUUID") and module_ctx.get("uuidValue") and module_ctx.get("userId")):
