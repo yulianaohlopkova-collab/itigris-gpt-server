@@ -424,6 +424,54 @@ paths:
               schema:
                 type: object
 
+  /contactlenses/remainGoodsReport/snapshot:
+    get:
+      operationId: contactlensesRemainGoodsReportSnapshotGet
+      summary: Прочитать текущий global snapshot remainGoodsReport (rows + summary)
+      description: >
+        Source of truth для МКЛ после авто-refresh или загрузки snapshot.
+        Возвращает распарсенные строки (rows), список департаментов, totals/summary и метаданные (filename/ttl).
+      parameters:
+        - name: include_rows
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+          description: Если false — вернуть только summary/metadata без массива rows.
+      responses:
+        "200":
+          description: Snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  filename:
+                    type: string
+                  stored_at_unix:
+                    type: integer
+                  expires_at_unix:
+                    type: integer
+                  departments:
+                    type: array
+                    items:
+                      type: string
+                  departments_count:
+                    type: integer
+                  rows_count:
+                    type: integer
+                  overall_summary:
+                    type: object
+                    additionalProperties: true
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
   /contactlenses/remainGoodsReport/auto/status:
     get:
       operationId: contactlensesRemainGoodsReportAutoStatus
