@@ -2030,18 +2030,24 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                         user_start_debug["cookie_after"] = {c.name: c.value for c in client.cookies.jar}  # type: ignore[attr-defined]
                     except Exception:
                         user_start_debug["cookie_after"] = {}
+
+                    # Always attach userStart_debug even if the main-page probe below fails.
+                    post_login_main_probe = {
+                        "userStart_debug": user_start_debug,
+                        "cookie_header": _cookie_header_from_client(client),
+                    }
                     # Browser-like: immediately probe /odl after redirect to let the session "settle".
                     try:
                         r_main = await client.get(f"https://optima.itigris.ru/{APP_NAME}", headers=web_headers)
                         main_text = r_main.text or ""
-                        post_login_main_probe = {
-                            "status": r_main.status_code,
-                            "final_url": str(r_main.request.url),
-                            "len": len(main_text),
-                            "snippet": (main_text[:1200] if main_text else None),
-                            "cookie_header": _cookie_header_from_client(client),
-                            "userStart_debug": user_start_debug,
-                        }
+                        post_login_main_probe.update(
+                            {
+                                "status": r_main.status_code,
+                                "final_url": str(r_main.request.url),
+                                "len": len(main_text),
+                                "snippet": (main_text[:1200] if main_text else None),
+                            }
+                        )
                     except Exception:
                         pass
                 else:
