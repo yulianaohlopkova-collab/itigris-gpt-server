@@ -2088,12 +2088,43 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                 "companyUUID": (qs.get("companyUUID") or [company_uuid])[0] or company_uuid,
                 "auth_mode": "cookie",
             }
-            # Hit userStart once; some sessions set additional cookies.
+            # Always perform the HAR6 userStart bootstrap after login.
+            # This initializes the legacy page context used by menu/openMenuElement and reportsStart pages.
             user_start_ok = False
+            user_start_debug: Dict[str, Any] = {"attempted": True}
             try:
-                r2 = await client.get(absolute, headers=web_headers)
-                user_start_ok = (r2.status_code == 200)
-            except Exception:
+                user_start_url = (
+                    f"https://optima.itigris.ru/{APP_NAME}/login/userStart"
+                    f"?pageUUID={quote(extracted_page_uuid)}"
+                    f"&userId={quote(extracted_user_id or '')}"
+                    f"&uuidValue={quote(extracted_uuid_value)}"
+                    f"&companyUUID={quote(company_uuid)}"
+                    f"&loginAction=true"
+                )
+                user_start_debug["userStart_url"] = user_start_url
+                user_start_debug["params"] = {
+                    "pageUUID": extracted_page_uuid,
+                    "uuidValue": extracted_uuid_value,
+                    "userId": extracted_user_id or "",
+                    "companyUUID": company_uuid,
+                    "loginAction": "true",
+                }
+                us_headers, us_eff_cookie = _ensure_cookie_header(web_headers, client)
+                r_us = await client.get(user_start_url, headers=us_headers, follow_redirects=True)
+                us_final = str(r_us.request.url)
+                us_text = r_us.text or ""
+                user_start_debug.update(
+                    {
+                        "status": r_us.status_code,
+                        "final_url": us_final,
+                        "effective_cookie_header_sent": us_eff_cookie,
+                        "body_snippet": (us_text[:1200] if us_text else None),
+                        "ctx_from_html": {k: (_extract_optima_ctx_from_text(us_text).get(k) or None) for k in ["userId", "pageUUID", "uuidValue"]},
+                    }
+                )
+                user_start_ok = (r_us.status_code == 200)
+            except Exception as e:
+                user_start_debug.update({"error": type(e).__name__, "message": str(e)[:400]})
                 user_start_ok = False
 
             # After login/userStart, Optima often issues the "current page context" (pageUUID/uuidValue)
@@ -2150,6 +2181,11 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
                     "final_cookie_header_after_login": _cookie_header_from_client(client),
                 }
             )
+            # Expose userStart_debug at top-level login_debug so it cannot be lost in other probes.
+            try:
+                dbg["userStart_debug"] = user_start_debug
+            except Exception:
+                pass
             if post_login_main_probe:
                 dbg["post_login_main_probe"] = post_login_main_probe
             ctx["_debug"] = dbg  # type: ignore[typeddict-item]
@@ -2395,14 +2431,29 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
             "companyUUID": (base_ctx.get("companyUUID") or company_uuid).strip() or company_uuid,
         }
 
+        # Include userStart probe (HAR6) - it often initializes legacy page ctx used by menu/reports.
+        login_page_uuid = (ITIGRIS_WEB_LOGIN_PAGE_UUID or "").strip()
+        login_uuid_value = str(uuid.uuid4())
+        user_start_probe_url = (
+            f"https://optima.itigris.ru/{APP_NAME}/login/userStart"
+            f"?pageUUID={quote(login_page_uuid)}"
+            f"&userId="
+            f"&uuidValue={quote(login_uuid_value)}"
+            f"&companyUUID={quote(company_uuid)}"
+            f"&loginAction=true"
+        ) if login_page_uuid else ""
+
         probe_urls = [
             f"https://optima.itigris.ru/{APP_NAME}",
             f"https://optima.itigris.ru/{APP_NAME}/",
+            user_start_probe_url,
             f"https://optima.itigris.ru/{APP_NAME}/startPageAccountant",
             f"https://optima.itigris.ru/{APP_NAME}/reportsStart/startPageAccountant",
         ]
 
         for u in probe_urls:
+            if not u:
+                continue
             try:
                 hdrs, eff_cookie = _ensure_cookie_header(web_headers, client)
                 r = await client.get(u, headers=hdrs, follow_redirects=True)
@@ -2439,7 +2490,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         # install-level context as deterministic fallback.
         if not (best.get("pageUUID") and best.get("uuidValue") and best.get("userId")):
             fallback_user_id = (ITIGRIS_WEB_USER_ID or "").strip()
-            fallback_page_uuid = (ITIGRIS_WEB_PAGE_UUID or ITIGRIS_WEB_LOGIN_PAGE_UUID or "").strip()
+            # Prefer login page UUID for legacy reports bootstrap (HAR6), NOT the generic page UUID.
+            fallback_page_uuid = (ITIGRIS_WEB_LOGIN_PAGE_UUID or ITIGRIS_WEB_PAGE_UUID or "").strip()
             if fallback_user_id and fallback_page_uuid:
                 best = _merge(best, {"userId": fallback_user_id, "pageUUID": fallback_page_uuid, "uuidValue": str(uuid.uuid4())})
                 try:
