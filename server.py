@@ -709,7 +709,12 @@ def detect_header_indices(headers: List[str]) -> Dict[str, Optional[int]]:
 
 
 def header_indices_ok(idxs: Dict[str, Optional[int]]) -> bool:
-    return idxs["qty_packs"] is not None and idxs["qty_units"] is not None and idxs["value"] is not None
+    # Different report types have different quantity columns.
+    # Contact lenses usually have both packs and units, while frames/sunglasses/accessories often have just one "Кол-во".
+    # Require value and at least one qty column.
+    if idxs["value"] is None:
+        return False
+    return (idxs["qty_packs"] is not None) or (idxs["qty_units"] is not None)
 
 
 def debug_headers(headers: List[str]) -> Dict[str, Any]:
@@ -813,11 +818,19 @@ def parse_remain_goods_csv(raw: bytes) -> List[Dict[str, Any]]:
         enrich = _enrich_from_raw(raw_cells)
         raw_text = " | ".join(str(v or "").strip() for v in raw_cells.values() if str(v or "").strip())
 
+        units = parse_float(get_i(idx_units))
+        packs = parse_float(get_i(idx_packs))
+        # For non-pack report types, only one quantity column may exist. Mirror it to both fields.
+        if packs is None and units is not None:
+            packs = units
+        if units is None and packs is not None:
+            units = packs
+
         out.append(
             {
                 "department": str(get_i(idx_department) or "").strip() if idx_department is not None else "",
-                "qty_packs": parse_float(get_i(idx_packs)) or 0,
-                "qty_units": parse_float(get_i(idx_units)) or 0,
+                "qty_packs": packs or 0,
+                "qty_units": units or 0,
                 "remaining_in_pack": parse_float(get_i(idx_remaining)) if idx_remaining is not None else None,
                 "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
                 "value": parse_float(get_i(idx_value)) or 0,
@@ -945,11 +958,18 @@ def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
             enrich = _enrich_from_raw(raw_cells)
             raw_text = " | ".join(str(v or "").strip() for v in raw_cells.values() if str(v or "").strip())
 
+            units = parse_float(get_i(idx_units))
+            packs = parse_float(get_i(idx_packs))
+            if packs is None and units is not None:
+                packs = units
+            if units is None and packs is not None:
+                units = packs
+
             out.append(
                 {
                     "department": str(get_i(idx_department) or "").strip() if idx_department is not None else "",
-                    "qty_packs": parse_float(get_i(idx_packs)) or 0,
-                    "qty_units": parse_float(get_i(idx_units)) or 0,
+                    "qty_packs": packs or 0,
+                    "qty_units": units or 0,
                     "remaining_in_pack": parse_float(get_i(idx_remaining)) if idx_remaining is not None else None,
                     "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
                     "value": parse_float(get_i(idx_value)) or 0,
@@ -1081,11 +1101,18 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
             raw_cells = _row_raw_cells(r)
             enrich = _enrich_from_raw(raw_cells)
             raw_text = " | ".join(str(v or "").strip() for v in raw_cells.values() if str(v or "").strip())
+
+            units = parse_float(cell(r, idx_units)) if idx_units is not None else None
+            packs = parse_float(cell(r, idx_packs)) if idx_packs is not None else None
+            if packs is None and units is not None:
+                packs = units
+            if units is None and packs is not None:
+                units = packs
             out.append(
                 {
                     "department": str(cell(r, idx_department) or "").strip() if idx_department is not None else "",
-                    "qty_packs": parse_float(cell(r, idx_packs)) or 0,
-                    "qty_units": parse_float(cell(r, idx_units)) or 0,
+                    "qty_packs": packs or 0,
+                    "qty_units": units or 0,
                     "remaining_in_pack": parse_float(cell(r, idx_remaining)) if idx_remaining is not None else None,
                     "in_pack": parse_float(cell(r, idx_in_pack)) if idx_in_pack is not None else None,
                     "value": parse_float(cell(r, idx_value)) or 0,
@@ -1325,7 +1352,8 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
     except Exception:
         _last_remain_goods_html_parse_debug = {"error": "parse_debug_failed"}
 
-    required_keys = {"qty_packs", "qty_units", "remaining_in_pack", "in_pack", "value"}
+    # HTML preview/export tables differ by report type. Require "Сумма" plus any quantity column.
+    required_keys = {"value"}
     tables = soup.find_all("table")
     matched_tables: List[Tuple[List[str], Any]] = []
     debug_tables: List[Dict[str, Any]] = []
@@ -1354,7 +1382,7 @@ def _parse_remain_goods_html(raw: bytes) -> List[Dict[str, Any]]:
             }
             present = {k for k, v in idx.items() if v is not None}
             candidates.append({"cells": texts[:20], "present_keys": sorted(present)})
-            if required_keys.issubset(present):
+            if required_keys.issubset(present) and (("qty_packs" in present) or ("qty_units" in present)):
                 header_row = tr
                 header_cells = texts
                 break
