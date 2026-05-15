@@ -4197,6 +4197,144 @@ async def contactlenses_remain_goods_report_snapshot_get(
     return out
 
 
+def _norm_text(v: Any) -> str:
+    s = str(v or "").strip().lower()
+    s = s.replace("\u00a0", " ")
+    while "  " in s:
+        s = s.replace("  ", " ")
+    return s
+
+
+def _row_matches_query(row: Dict[str, Any], q: str) -> bool:
+    if not q:
+        return True
+    hay = " ".join(
+        [
+            _norm_text(row.get("department")),
+            _norm_text(row.get("manufacturer")),
+            _norm_text(row.get("brand")),
+            _norm_text(row.get("product_name")),
+            _norm_text(row.get("model")),
+            _norm_text(row.get("design")),
+            _norm_text(row.get("category")),
+            _norm_text(row.get("sku")),
+            _norm_text(row.get("raw_text")),
+        ]
+    )
+    return q in hay
+
+
+@app.get("/contactlenses/remainGoodsReport/snapshot/search")
+async def contactlenses_remain_goods_report_snapshot_search(
+    request: Request,
+    report_type: Optional[str] = None,
+    department_name: Optional[str] = None,
+    brand: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    product_name: Optional[str] = None,
+    model: Optional[str] = None,
+    design: Optional[str] = None,
+    category: Optional[str] = None,
+    query: Optional[str] = None,
+    include_rows: bool = False,
+    limit: int = 200,
+) -> Any:
+    """
+    Search within the parsed remainGoodsReport snapshot rows.
+
+    This should be used for detailed product questions (brand/model/design filters) instead of remoteRemains/list.
+    """
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+
+    snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
+    if not snap:
+        return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
+
+    rows = list(snap.get("rows") or [])
+    dep_filter = (department_name or "").strip()
+    if dep_filter:
+        matched_dep = _match_snapshot_department(dep_filter, sorted(list((snap.get("by_department") or {}).keys())))
+        if matched_dep:
+            dep_filter = matched_dep
+
+    q = _norm_text(query)
+    f_brand = _norm_text(brand)
+    f_manuf = _norm_text(manufacturer)
+    f_name = _norm_text(product_name)
+    f_model = _norm_text(model)
+    f_design = _norm_text(design)
+    f_cat = _norm_text(category)
+
+    def _eq_or_contains(field_val: Any, needle: str) -> bool:
+        if not needle:
+            return True
+        hay = _norm_text(field_val)
+        return needle in hay
+
+    matched: List[Dict[str, Any]] = []
+    total_units = 0
+    total_packs = 0
+    total_value = 0.0
+
+    for r in rows:
+        if dep_filter and _norm_text(r.get("department")) != _norm_text(dep_filter):
+            continue
+        if not _eq_or_contains(r.get("brand"), f_brand):
+            continue
+        if not _eq_or_contains(r.get("manufacturer"), f_manuf):
+            continue
+        if not _eq_or_contains(r.get("product_name"), f_name):
+            continue
+        if not _eq_or_contains(r.get("model"), f_model):
+            continue
+        if not _eq_or_contains(r.get("design"), f_design):
+            continue
+        if not _eq_or_contains(r.get("category"), f_cat):
+            continue
+        if not _row_matches_query(r, q):
+            continue
+
+        total_units += int(parse_float(r.get("qty_units")) or 0)
+        total_packs += int(parse_float(r.get("qty_packs")) or 0)
+        total_value += float(parse_float(r.get("value")) or 0.0)
+        matched.append(r)
+        if len(matched) >= max(1, min(int(limit or 200), 2000)):
+            break
+
+    out: Dict[str, Any] = {
+        "ok": True,
+        "source": "remainGoodsReport snapshot",
+        "report_type": snap.get("report_type"),
+        "snapshot": {
+            "filename": snap.get("filename"),
+            "stored_at_unix": snap.get("stored_at_unix"),
+            "expires_at_unix": snap.get("expires_at_unix"),
+            "rows_count": snap.get("rows_count"),
+        },
+        "filters": {
+            "department_name": department_name,
+            "matched_department": dep_filter if department_name else None,
+            "brand": brand,
+            "manufacturer": manufacturer,
+            "product_name": product_name,
+            "model": model,
+            "design": design,
+            "category": category,
+            "query": query,
+            "limit": limit,
+        },
+        "matched_rows_count": len(matched),
+        "total_qty_units": total_units,
+        "total_qty_packs": total_packs,
+        "total_value": round(total_value, 2),
+    }
+    if include_rows:
+        out["rows"] = matched
+    return out
+
+
 @app.get("/debug/optima/login-probe")
 async def debug_optima_login_probe(request: Request) -> Any:
     """

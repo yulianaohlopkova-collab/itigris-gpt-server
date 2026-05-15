@@ -432,6 +432,14 @@ paths:
         Source of truth для МКЛ после авто-refresh или загрузки snapshot.
         Возвращает распарсенные строки (rows), список департаментов, totals/summary и метаданные (filename/ttl).
       parameters:
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Тип товара (reportType). Например: Контактные линзы, Оправы, Солнцезащитные очки, Линзы, Аксессуары.
+            Если не задан — используется default snapshot (Контактные линзы).
         - name: include_rows
           in: query
           required: false
@@ -472,6 +480,113 @@ paths:
                       type: object
                       additionalProperties: true
 
+  /contactlenses/remainGoodsReport/snapshot/search:
+    get:
+      operationId: contactlensesRemainGoodsReportSnapshotSearch
+      summary: Поиск по строкам snapshot remainGoodsReport (детальные вопросы по товарке)
+      description: >
+        Используйте ЭТОТ endpoint первым для вопросов вида "сколько [бренд/model/design] в [департамент]".
+        Не используйте remoteRemains/list или count_by_filters для детальных товарных вопросов, если есть snapshot.
+        Возвращает matched_rows_count и totals (qty_units/qty_packs/value) по найденным строкам.
+      parameters:
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Тип товара (reportType).
+        - name: department_name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Департамент (например "Ленина, 7"). Разрешены алиасы, будет best-effort match.
+        - name: brand
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Бренд (contains match, case-insensitive).
+        - name: manufacturer
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Производитель (contains match, case-insensitive).
+        - name: product_name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Наименование/товар (contains match, case-insensitive).
+        - name: model
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Модель (contains match, case-insensitive).
+        - name: design
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Дизайн (contains match, case-insensitive).
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Категория/тип (contains match, case-insensitive).
+        - name: query
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Общий поисковый текст по полям строки (brand/model/name/raw_text).
+        - name: include_rows
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Если true — вернуть массив rows (может быть большим).
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            minimum: 1
+            maximum: 2000
+          description: Максимум возвращаемых строк (и учитываемых в totals).
+      responses:
+        "200":
+          description: Search result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  source:
+                    type: string
+                  report_type:
+                    type: string
+                  matched_rows_count:
+                    type: integer
+                  total_qty_units:
+                    type: integer
+                  total_qty_packs:
+                    type: integer
+                  total_value:
+                    type: number
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
   /contactlenses/remainGoodsReport/auto/status:
     get:
       operationId: contactlensesRemainGoodsReportAutoStatus
@@ -503,6 +618,13 @@ paths:
           schema:
             type: boolean
             default: false
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Тип товара (reportType). Если задан — обновляется snapshot именно для этого типа товара.
       responses:
         "200":
           description: Snapshot refreshed
