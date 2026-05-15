@@ -419,6 +419,9 @@ REMAINGOODS_SNAPSHOT_TTL_SECONDS = int(os.getenv("REMAINGOODS_SNAPSHOT_TTL_SECON
 # In-memory snapshot cache (Render dynos may restart; this is MVP-grade).
 _contactlenses_report_snapshots: Dict[int, Dict[str, Any]] = {}
 _contactlenses_report_global_snapshot: Optional[Dict[str, Any]] = None
+# Category-aware (reportType-aware) snapshots. Key is normalized report type, e.g.
+# "контактные линзы", "оправы", "линзы", "аксессуары", "солнцезащитные очки".
+_remain_goods_global_snapshots_by_type: Dict[str, Dict[str, Any]] = {}
 # Debug for the most recent remainGoodsReport HTML parse (auto-web path).
 _last_remain_goods_html_parse_debug: Optional[Dict[str, Any]] = None
 # Debug for the most recent remainGoodsReport web form payload (auto-web path).
@@ -909,6 +912,15 @@ def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
             category = pick("категория", "тип товара", "тип")
             design = pick("дизайн")
             sku = pick("артикул", "sku", "код", "код товара")
+            # Category-specific / layout-specific fallback naming.
+            # Many report types don't have a single "Наименование" column; prefer model/brand when present.
+            if not product_name:
+                if model and brand:
+                    product_name = f"{brand} {model}".strip()
+                elif model:
+                    product_name = model
+                elif brand:
+                    product_name = brand
             raw_name = product_name
             return {
                 "product_name": product_name,
@@ -1037,6 +1049,13 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
             category = pick("категория", "тип товара", "тип")
             design = pick("дизайн")
             sku = pick("артикул", "sku", "код", "код товара")
+            if not product_name:
+                if model and brand:
+                    product_name = f"{brand} {model}".strip()
+                elif model:
+                    product_name = model
+                elif brand:
+                    product_name = brand
             raw_name = product_name
             return {
                 "product_name": product_name,
@@ -1175,6 +1194,23 @@ def get_global_snapshot() -> Optional[Dict[str, Any]]:
         return None
     if int(time.time()) >= int(snap["expires_at_unix"]):
         _contactlenses_report_global_snapshot = None
+        return None
+    return snap
+
+
+def _normalize_report_type(report_type: Optional[str]) -> str:
+    # Keep backward-compat stable: default is contact lenses.
+    rt = (report_type or "Контактные линзы").strip()
+    return rt.lower()
+
+
+def get_global_snapshot_by_type(report_type: Optional[str]) -> Optional[Dict[str, Any]]:
+    key = _normalize_report_type(report_type)
+    snap = _remain_goods_global_snapshots_by_type.get(key)
+    if not snap:
+        return None
+    if int(time.time()) >= int(snap["expires_at_unix"]):
+        _remain_goods_global_snapshots_by_type.pop(key, None)
         return None
     return snap
 
@@ -1604,7 +1640,9 @@ def _extract_optima_ctx_from_text(text: str) -> Dict[str, str]:
     return out
 
 
-async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] = None) -> Tuple[str, List[Dict[str, Any]]]:
+async def _auto_fetch_remain_goods_report_via_web(
+    date_ddmmyyyy: Optional[str] = None, report_type: Optional[str] = None
+) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Uses Optima web session to request HTML reportPage and parse it.
     Preferred: login/password/key (server performs login to get fresh session cookies).
@@ -1621,6 +1659,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
     else:
         # Prefer a stable default that matches the browser \"select all\" payload.
         dep_ids = list(REMAINGOODS_WEB_DEFAULT_DEPARTMENT_IDS)
+
+    rt = (report_type or REMAINGOODS_WEB_REPORT_TYPE).strip() if (report_type or REMAINGOODS_WEB_REPORT_TYPE) else "Контактные линзы"
 
     def build_report_form(user_id: str, page_uuid: str, uuid_value: str) -> Dict[str, Any]:
         # NOTE: For httpx.AsyncClient we must avoid passing "data" as a list of tuples with repeated
@@ -1649,8 +1689,8 @@ async def _auto_fetch_remain_goods_report_via_web(date_ddmmyyyy: Optional[str] =
         "groupByDepartment_input0": "По департаменту и параметрам",
         "groupByDepartment": "true",
         # report type / price type
-        "reportType_input0": REMAINGOODS_WEB_REPORT_TYPE,
-        "reportType": REMAINGOODS_WEB_REPORT_TYPE,
+        "reportType_input0": rt,
+        "reportType": rt,
         "priceType_input0": REMAINGOODS_WEB_PRICE_TYPE,
         "priceType": REMAINGOODS_WEB_PRICE_TYPE,
         # accessory filters
@@ -3176,7 +3216,7 @@ def _parse_remain_goods_report_auto(filename: Optional[str], raw: bytes) -> Tupl
     return (filename or "remainGoodsReport.csv"), parse_remain_goods_csv(raw)
 
 
-async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dict[str, Any]:
+async def maybe_refresh_global_snapshot_from_itigris(force: bool = False, report_type: Optional[str] = None) -> Dict[str, Any]:
     """
     Best-effort refresh of global snapshot from ITigris.
     Methods:
@@ -3192,7 +3232,9 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         _contactlenses_auto_fetch_state["last_error_at_unix"] = now
         return {"ok": False, "error": "auto_fetch_not_configured"}
 
-    global_snap = get_global_snapshot()
+    # Category-aware snapshots: by default still use contact lenses as the "primary" snapshot
+    # to avoid breaking existing consumers.
+    global_snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
     if not force and global_snap:
         age = now - int(global_snap["stored_at_unix"])
         if age < REMAINGOODS_AUTO_REFRESH_MIN_SECONDS:
@@ -3210,7 +3252,7 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
             resolved_filename, rows = _parse_remain_goods_report_auto(filename, raw)
             method_used = "url_template"
         else:
-            resolved_filename, rows = await _auto_fetch_remain_goods_report_via_web()
+            resolved_filename, rows = await _auto_fetch_remain_goods_report_via_web(report_type=report_type)
             method_used = "web_reportPage"
 
         overall = remain_goods_totals(rows, prefer_summary_row=True)
@@ -3240,11 +3282,11 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         }
 
     expires = now + REMAINGOODS_SNAPSHOT_TTL_SECONDS
-    global _contactlenses_report_global_snapshot
-    _contactlenses_report_global_snapshot = {
+    snap_obj = {
         "stored_at_unix": now,
         "expires_at_unix": expires,
         "filename": resolved_filename,
+        "report_type": (report_type or "Контактные линзы"),
         "rows_count": len(rows),
         "rows": rows,
         "overall_summary": overall,
@@ -3255,6 +3297,12 @@ async def maybe_refresh_global_snapshot_from_itigris(force: bool = False) -> Dic
         "web_http_debug_phases": _last_remain_goods_web_http_debug_phases,
         "configured_cookie_debug": _last_remain_goods_configured_cookie_debug,
     }
+    key = _normalize_report_type(report_type)
+    _remain_goods_global_snapshots_by_type[key] = snap_obj
+    # Preserve backward compatibility: keep the legacy global snapshot pointing at Contact Lenses.
+    if not report_type or key == _normalize_report_type("Контактные линзы"):
+        global _contactlenses_report_global_snapshot
+        _contactlenses_report_global_snapshot = snap_obj
 
     _contactlenses_auto_fetch_state["last_success_unix"] = now
     _contactlenses_auto_fetch_state["last_error"] = None
@@ -3922,11 +3970,11 @@ async def contactlenses_remain_goods_report_snapshot_set_global(
 
 
 @app.get("/contactlenses/remainGoodsReport/auto/status")
-async def contactlenses_remain_goods_report_auto_status(request: Request) -> Any:
+async def contactlenses_remain_goods_report_auto_status(request: Request, report_type: Optional[str] = None) -> Any:
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
-    global_snap = get_global_snapshot()
+    global_snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
     return {
         "build_commit": BUILD_COMMIT or None,
         "auto_refresh_impl_version": AUTO_REFRESH_IMPL_VERSION,
@@ -3956,11 +4004,13 @@ async def contactlenses_remain_goods_report_auto_status(request: Request) -> Any
 
 
 @app.post("/contactlenses/remainGoodsReport/auto/refresh")
-async def contactlenses_remain_goods_report_auto_refresh(request: Request, force: bool = Query(False)) -> Any:
+async def contactlenses_remain_goods_report_auto_refresh(
+    request: Request, force: bool = Query(False), report_type: Optional[str] = None
+) -> Any:
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
-    status = await maybe_refresh_global_snapshot_from_itigris(force=force)
+    status = await maybe_refresh_global_snapshot_from_itigris(force=force, report_type=report_type)
     if not status.get("ok"):
         # Return debug payload to quickly fix cookie/login/export parsing issues.
         raise HTTPException(status_code=502, detail=status)
@@ -4053,14 +4103,14 @@ async def contactlenses_stock(
 
 
 @app.get("/contactlenses/remainGoodsReport/snapshot/departments")
-async def contactlenses_remain_goods_report_snapshot_departments(request: Request) -> Any:
+async def contactlenses_remain_goods_report_snapshot_departments(request: Request, report_type: Optional[str] = None) -> Any:
     """
     Debug helper: list department keys that were parsed into the current global snapshot.
     """
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
-    global_snap = get_global_snapshot()
+    global_snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
     if not global_snap:
         return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
     deps = sorted(list((global_snap.get("by_department") or {}).keys()))
@@ -4079,20 +4129,23 @@ async def contactlenses_remain_goods_report_snapshot_departments(request: Reques
 
 
 @app.get("/contactlenses/remainGoodsReport/snapshot")
-async def contactlenses_remain_goods_report_snapshot_get(request: Request, include_rows: bool = True) -> Any:
+async def contactlenses_remain_goods_report_snapshot_get(
+    request: Request, include_rows: bool = True, report_type: Optional[str] = None
+) -> Any:
     """
     Read the current global remainGoodsReport snapshot (rows + summary + metadata).
     """
     auth_err = require_auth_token(request)
     if auth_err:
         return auth_err
-    global_snap = get_global_snapshot()
+    global_snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
     if not global_snap:
         return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
     deps = sorted(list((global_snap.get("by_department") or {}).keys()))
     out: Dict[str, Any] = {
         "ok": True,
         "filename": global_snap.get("filename"),
+        "report_type": global_snap.get("report_type"),
         "stored_at_unix": global_snap.get("stored_at_unix"),
         "expires_at_unix": global_snap.get("expires_at_unix"),
         "departments": deps,
