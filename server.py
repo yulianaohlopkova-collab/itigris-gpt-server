@@ -751,12 +751,64 @@ def parse_remain_goods_csv(raw: bytes) -> List[Dict[str, Any]]:
     idx_value = hdr_dbg["indices"]["value"]
     idx_unit_price = hdr_dbg["indices"]["unit_price"]
 
+    def _norm_key(h: str) -> str:
+        return normalize_header(str(h or ""))
+
+    def _row_raw_cells(row_vals: List[Any]) -> Dict[str, Any]:
+        out_cells: Dict[str, Any] = {}
+        for j, h in enumerate(headers):
+            key = str(h or "").strip()
+            if not key:
+                continue
+            out_cells[key] = row_vals[j] if j < len(row_vals) else None
+        return out_cells
+
+    def _enrich_from_raw(raw_cells: Dict[str, Any]) -> Dict[str, Any]:
+        by_norm: Dict[str, Any] = {}
+        for k, v in raw_cells.items():
+            nk = _norm_key(k)
+            if nk and nk not in by_norm:
+                by_norm[nk] = v
+
+        def pick(*keys: str) -> Optional[str]:
+            for kk in keys:
+                if kk in by_norm:
+                    s = str(by_norm.get(kk) or "").strip()
+                    if s:
+                        return s
+            return None
+
+        product_name = pick("наименование", "товар", "название")
+        manufacturer = pick("производитель")
+        brand = pick("бренд")
+        supplier = pick("поставщик", "вендор", "vendor")
+        model = pick("модель")
+        category = pick("категория", "тип товара", "тип")
+        design = pick("дизайн")
+        sku = pick("артикул", "sku", "код", "код товара")
+        raw_name = product_name
+        return {
+            "product_name": product_name,
+            "raw_name": raw_name,
+            "brand": brand,
+            "manufacturer": manufacturer,
+            "supplier": supplier,
+            "model": model,
+            "category": category,
+            "design": design,
+            "sku": sku,
+        }
+
     out: List[Dict[str, Any]] = []
     for row in all_rows[header_row_index + 1 :]:
         def get_i(i: Optional[int]) -> Any:
             if i is None or i >= len(row):
                 return None
             return row[i]
+
+        raw_cells = _row_raw_cells(row)
+        enrich = _enrich_from_raw(raw_cells)
+        raw_text = " | ".join(str(v or "").strip() for v in raw_cells.values() if str(v or "").strip())
 
         out.append(
             {
@@ -767,6 +819,10 @@ def parse_remain_goods_csv(raw: bytes) -> List[Dict[str, Any]]:
                 "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
                 "value": parse_float(get_i(idx_value)) or 0,
                 "unit_price": parse_float(get_i(idx_unit_price)) if idx_unit_price is not None else None,
+                # Enrichment (must not affect totals)
+                **enrich,
+                "raw_cells": raw_cells,
+                "raw_text": raw_text,
             }
         )
     return out
@@ -818,12 +874,64 @@ def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
         idx_value = hdr_dbg["indices"]["value"]
         idx_unit_price = hdr_dbg["indices"]["unit_price"]
 
+        def _norm_key(h: str) -> str:
+            return normalize_header(str(h or ""))
+
+        def _row_raw_cells(row_vals: List[Any]) -> Dict[str, Any]:
+            out_cells: Dict[str, Any] = {}
+            for j, h in enumerate(headers):
+                key = str(h or "").strip()
+                if not key:
+                    continue
+                out_cells[key] = row_vals[j] if j < len(row_vals) else None
+            return out_cells
+
+        def _enrich_from_raw(raw_cells: Dict[str, Any]) -> Dict[str, Any]:
+            by_norm: Dict[str, Any] = {}
+            for k, v in raw_cells.items():
+                nk = _norm_key(k)
+                if nk and nk not in by_norm:
+                    by_norm[nk] = v
+
+            def pick(*keys: str) -> Optional[str]:
+                for kk in keys:
+                    if kk in by_norm:
+                        s = str(by_norm.get(kk) or "").strip()
+                        if s:
+                            return s
+                return None
+
+            product_name = pick("наименование", "товар", "название")
+            manufacturer = pick("производитель")
+            brand = pick("бренд")
+            supplier = pick("поставщик", "вендор", "vendor")
+            model = pick("модель")
+            category = pick("категория", "тип товара", "тип")
+            design = pick("дизайн")
+            sku = pick("артикул", "sku", "код", "код товара")
+            raw_name = product_name
+            return {
+                "product_name": product_name,
+                "raw_name": raw_name,
+                "brand": brand,
+                "manufacturer": manufacturer,
+                "supplier": supplier,
+                "model": model,
+                "category": category,
+                "design": design,
+                "sku": sku,
+            }
+
         out: List[Dict[str, Any]] = []
         for row in rows_cache[header_row_index + 1 :]:
             def get_i(i: Optional[int]) -> Any:
                 if i is None or i >= len(row):
                     return None
                 return row[i]
+
+            raw_cells = _row_raw_cells(row)
+            enrich = _enrich_from_raw(raw_cells)
+            raw_text = " | ".join(str(v or "").strip() for v in raw_cells.values() if str(v or "").strip())
 
             out.append(
                 {
@@ -834,6 +942,10 @@ def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
                     "in_pack": parse_float(get_i(idx_in_pack)) if idx_in_pack is not None else None,
                     "value": parse_float(get_i(idx_value)) or 0,
                     "unit_price": parse_float(get_i(idx_unit_price)) if idx_unit_price is not None else None,
+                    # Enrichment (must not affect totals)
+                    **enrich,
+                    "raw_cells": raw_cells,
+                    "raw_text": raw_text,
                 }
             )
         return out
@@ -890,6 +1002,54 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
         idx_value = hdr_dbg["indices"]["value"]
         idx_unit_price = hdr_dbg["indices"]["unit_price"]
 
+        def _norm_key(h: str) -> str:
+            return normalize_header(str(h or ""))
+
+        def _row_raw_cells(r: int) -> Dict[str, Any]:
+            out_cells: Dict[str, Any] = {}
+            for j, h in enumerate(headers):
+                key = str(h or "").strip()
+                if not key:
+                    continue
+                out_cells[key] = cell(r, j)
+            return out_cells
+
+        def _enrich_from_raw(raw_cells: Dict[str, Any]) -> Dict[str, Any]:
+            by_norm: Dict[str, Any] = {}
+            for k, v in raw_cells.items():
+                nk = _norm_key(k)
+                if nk and nk not in by_norm:
+                    by_norm[nk] = v
+
+            def pick(*keys: str) -> Optional[str]:
+                for kk in keys:
+                    if kk in by_norm:
+                        s = str(by_norm.get(kk) or "").strip()
+                        if s:
+                            return s
+                return None
+
+            product_name = pick("наименование", "товар", "название")
+            manufacturer = pick("производитель")
+            brand = pick("бренд")
+            supplier = pick("поставщик", "вендор", "vendor")
+            model = pick("модель")
+            category = pick("категория", "тип товара", "тип")
+            design = pick("дизайн")
+            sku = pick("артикул", "sku", "код", "код товара")
+            raw_name = product_name
+            return {
+                "product_name": product_name,
+                "raw_name": raw_name,
+                "brand": brand,
+                "manufacturer": manufacturer,
+                "supplier": supplier,
+                "model": model,
+                "category": category,
+                "design": design,
+                "sku": sku,
+            }
+
         def cell(r: int, c: Optional[int]) -> Any:
             if c is None or c < 0 or c >= sheet.ncols:
                 return None
@@ -899,6 +1059,9 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
 
         out: List[Dict[str, Any]] = []
         for r in range(header_row_index + 1, sheet.nrows):
+            raw_cells = _row_raw_cells(r)
+            enrich = _enrich_from_raw(raw_cells)
+            raw_text = " | ".join(str(v or "").strip() for v in raw_cells.values() if str(v or "").strip())
             out.append(
                 {
                     "department": str(cell(r, idx_department) or "").strip() if idx_department is not None else "",
@@ -908,6 +1071,10 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
                     "in_pack": parse_float(cell(r, idx_in_pack)) if idx_in_pack is not None else None,
                     "value": parse_float(cell(r, idx_value)) or 0,
                     "unit_price": parse_float(cell(r, idx_unit_price)) if idx_unit_price is not None else None,
+                    # Enrichment (must not affect totals)
+                    **enrich,
+                    "raw_cells": raw_cells,
+                    "raw_text": raw_text,
                 }
             )
         return out
