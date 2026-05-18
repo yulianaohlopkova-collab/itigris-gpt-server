@@ -21,7 +21,7 @@ from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from analytics import analyze_dataset, load_input_folder
@@ -4516,6 +4516,24 @@ def openapi_json(request: Request) -> Any:
     }
     schema["security"] = [{"OdlServerToken": []}]
     return JSONResponse(schema)
+
+
+@app.get("/openapi-actions.yaml", include_in_schema=False)
+def openapi_actions_yaml(request: Request) -> Any:
+    """
+    Clean OpenAPI schema for GPT Actions routing.
+    Intentionally omits legacy/approximate endpoints.
+    """
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "openapi-actions.yaml")
+    try:
+        text = open(path, "r", encoding="utf-8").read()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="openapi_actions_yaml_missing")
+    return PlainTextResponse(text, media_type="text/yaml; charset=utf-8")
 
 
 @app.get("/docs", include_in_schema=False)
