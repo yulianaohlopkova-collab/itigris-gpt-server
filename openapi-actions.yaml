@@ -1,0 +1,247 @@
+openapi: 3.1.0
+info:
+  title: ODL Sales Analyst Actions API (Clean)
+  version: "1.0.0"
+  description: >
+    Clean OpenAPI schema for GPT Actions routing.
+    This schema intentionally exposes ONLY the exact remainGoodsReport snapshot tools
+    needed for accurate stock answers. Legacy/approximate tools (remoteRemains, remains-filtered,
+    count-by-filters, etc.) are intentionally omitted so GPT cannot select them.
+
+servers:
+  - url: https://itigris-gpt-server.onrender.com
+
+security:
+  - OdlServerToken: []
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      security: []
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /product-search:
+    get:
+      operationId: productSearch
+      summary: "PRIMARY: exact product search (remainGoodsReport snapshot)"
+      description: >
+        Use FIRST for detailed product stock questions (brand/model/design/product_name/SKU/etc).
+        Source of truth: parsed remainGoodsReport snapshot.
+        Use structured params (brand/design/model/product_name/manufacturer) and avoid using `query`
+        unless the user request is vague free-text.
+      parameters:
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'ITigris "Тип товара" (e.g. Контактные линзы, Оправы, Линзы, Солнцезащитные очки, Аксессуары).'
+        - name: department_name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Department name (aliases allowed; server best-effort matches).
+        - name: brand
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: manufacturer
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: product_name
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: model
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: design
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Row-level category/type (NOT report_type).
+        - name: query
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Free-text search across row fields. Use only when structured params are unclear.
+        - name: include_rows
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 2000
+      responses:
+        "200":
+          description: Product search totals (and optional rows)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, source, matched_rows_count, total_qty_units, total_qty_packs, total_value]
+                properties:
+                  ok:
+                    type: boolean
+                  source:
+                    type: string
+                  report_type:
+                    type: string
+                  matched_department:
+                    type: string
+                    nullable: true
+                  matched_rows_count:
+                    type: integer
+                  total_qty_units:
+                    type: integer
+                  total_qty_packs:
+                    type: integer
+                  total_value:
+                    type: number
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
+  /contactlenses/stock/{department_name}:
+    get:
+      operationId: contactlensesStock
+      summary: "PRIMARY for MКЛ totals by department: remainGoodsReport snapshot (truth)"
+      description: >
+        Use for contact lenses (МКЛ) department totals questions WITHOUT product filters.
+        Prefer source=auto (snapshot truth when available).
+      parameters:
+        - name: department_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            default: auto
+          description: auto|snapshot|api
+      responses:
+        "200":
+          description: Department totals for contact lenses
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /contactlenses/remainGoodsReport/auto/refresh:
+    post:
+      operationId: remainGoodsReportAutoRefresh
+      summary: Refresh remainGoodsReport snapshot from ITigris
+      description: >
+        Best-effort refresh of snapshot. Use when the user asks to "update now" or if snapshot is missing/stale.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'ITigris "Тип товара" (reportType).'
+      responses:
+        "200":
+          description: Refresh status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /contactlenses/remainGoodsReport/snapshot:
+    get:
+      operationId: remainGoodsReportSnapshotGet
+      summary: Read current remainGoodsReport snapshot (metadata and optional rows)
+      description: >
+        Read the parsed snapshot. Use include_rows=false by default for metadata.
+        For filtering/detailed product questions use /product-search instead.
+      parameters:
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'ITigris "Тип товара" (reportType).'
+        - name: include_rows
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: Snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /contactlenses/remainGoodsReport/snapshot/departments:
+    get:
+      operationId: remainGoodsReportSnapshotDepartments
+      summary: List departments present in the current snapshot
+      parameters:
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Departments list
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+components:
+  securitySchemes:
+    OdlServerToken:
+      type: apiKey
+      in: header
+      name: X-ODL-Token
+
