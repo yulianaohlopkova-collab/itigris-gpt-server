@@ -4224,6 +4224,88 @@ def _row_matches_query(row: Dict[str, Any], q: str) -> bool:
     return q in hay
 
 
+def _snapshot_search_impl(
+    *,
+    snap: Dict[str, Any],
+    report_type: Optional[str],
+    department_name: Optional[str],
+    brand: Optional[str],
+    manufacturer: Optional[str],
+    product_name: Optional[str],
+    model: Optional[str],
+    design: Optional[str],
+    category: Optional[str],
+    query: Optional[str],
+    include_rows: bool,
+    limit: int,
+) -> Dict[str, Any]:
+    rows = list(snap.get("rows") or [])
+    dep_filter = (department_name or "").strip()
+    if dep_filter:
+        matched_dep = _match_snapshot_department(dep_filter, sorted(list((snap.get("by_department") or {}).keys())))
+        if matched_dep:
+            dep_filter = matched_dep
+
+    q = _norm_text(query)
+    f_brand = _norm_text(brand)
+    f_manuf = _norm_text(manufacturer)
+    f_name = _norm_text(product_name)
+    f_model = _norm_text(model)
+    f_design = _norm_text(design)
+    f_cat = _norm_text(category)
+
+    def _contains(field_val: Any, needle: str) -> bool:
+        if not needle:
+            return True
+        hay = _norm_text(field_val)
+        return needle in hay
+
+    matched: List[Dict[str, Any]] = []
+    total_units = 0
+    total_packs = 0
+    total_value = 0.0
+
+    hard_limit = max(1, min(int(limit or 200), 2000))
+    for r in rows:
+        if dep_filter and _norm_text(r.get("department")) != _norm_text(dep_filter):
+            continue
+        if not _contains(r.get("brand"), f_brand):
+            continue
+        if not _contains(r.get("manufacturer"), f_manuf):
+            continue
+        if not _contains(r.get("product_name"), f_name):
+            continue
+        if not _contains(r.get("model"), f_model):
+            continue
+        if not _contains(r.get("design"), f_design):
+            continue
+        if not _contains(r.get("category"), f_cat):
+            continue
+        if not _row_matches_query(r, q):
+            continue
+
+        total_units += int(parse_float(r.get("qty_units")) or 0)
+        total_packs += int(parse_float(r.get("qty_packs")) or 0)
+        total_value += float(parse_float(r.get("value")) or 0.0)
+        matched.append(r)
+        if len(matched) >= hard_limit:
+            break
+
+    out: Dict[str, Any] = {
+        "ok": True,
+        "source": "remainGoodsReport snapshot",
+        "report_type": snap.get("report_type") or report_type,
+        "matched_department": dep_filter if department_name else None,
+        "matched_rows_count": len(matched),
+        "total_qty_units": total_units,
+        "total_qty_packs": total_packs,
+        "total_value": round(total_value, 2),
+    }
+    if include_rows:
+        out["rows"] = matched
+    return out
+
+
 @app.get("/contactlenses/remainGoodsReport/snapshot/search")
 async def contactlenses_remain_goods_report_snapshot_search(
     request: Request,
@@ -4251,88 +4333,81 @@ async def contactlenses_remain_goods_report_snapshot_search(
     snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
     if not snap:
         return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
-
-    rows = list(snap.get("rows") or [])
-    dep_filter = (department_name or "").strip()
-    if dep_filter:
-        matched_dep = _match_snapshot_department(dep_filter, sorted(list((snap.get("by_department") or {}).keys())))
-        if matched_dep:
-            dep_filter = matched_dep
-
-    q = _norm_text(query)
-    f_brand = _norm_text(brand)
-    f_manuf = _norm_text(manufacturer)
-    f_name = _norm_text(product_name)
-    f_model = _norm_text(model)
-    f_design = _norm_text(design)
-    f_cat = _norm_text(category)
-
-    def _eq_or_contains(field_val: Any, needle: str) -> bool:
-        if not needle:
-            return True
-        hay = _norm_text(field_val)
-        return needle in hay
-
-    matched: List[Dict[str, Any]] = []
-    total_units = 0
-    total_packs = 0
-    total_value = 0.0
-
-    for r in rows:
-        if dep_filter and _norm_text(r.get("department")) != _norm_text(dep_filter):
-            continue
-        if not _eq_or_contains(r.get("brand"), f_brand):
-            continue
-        if not _eq_or_contains(r.get("manufacturer"), f_manuf):
-            continue
-        if not _eq_or_contains(r.get("product_name"), f_name):
-            continue
-        if not _eq_or_contains(r.get("model"), f_model):
-            continue
-        if not _eq_or_contains(r.get("design"), f_design):
-            continue
-        if not _eq_or_contains(r.get("category"), f_cat):
-            continue
-        if not _row_matches_query(r, q):
-            continue
-
-        total_units += int(parse_float(r.get("qty_units")) or 0)
-        total_packs += int(parse_float(r.get("qty_packs")) or 0)
-        total_value += float(parse_float(r.get("value")) or 0.0)
-        matched.append(r)
-        if len(matched) >= max(1, min(int(limit or 200), 2000)):
-            break
-
-    out: Dict[str, Any] = {
-        "ok": True,
-        "source": "remainGoodsReport snapshot",
-        "report_type": snap.get("report_type"),
-        "snapshot": {
-            "filename": snap.get("filename"),
-            "stored_at_unix": snap.get("stored_at_unix"),
-            "expires_at_unix": snap.get("expires_at_unix"),
-            "rows_count": snap.get("rows_count"),
-        },
-        "filters": {
-            "department_name": department_name,
-            "matched_department": dep_filter if department_name else None,
-            "brand": brand,
-            "manufacturer": manufacturer,
-            "product_name": product_name,
-            "model": model,
-            "design": design,
-            "category": category,
-            "query": query,
-            "limit": limit,
-        },
-        "matched_rows_count": len(matched),
-        "total_qty_units": total_units,
-        "total_qty_packs": total_packs,
-        "total_value": round(total_value, 2),
+    base = _snapshot_search_impl(
+        snap=snap,
+        report_type=report_type,
+        department_name=department_name,
+        brand=brand,
+        manufacturer=manufacturer,
+        product_name=product_name,
+        model=model,
+        design=design,
+        category=category,
+        query=query,
+        include_rows=include_rows,
+        limit=limit,
+    )
+    # Keep the richer fields for the existing endpoint.
+    base["snapshot"] = {
+        "filename": snap.get("filename"),
+        "stored_at_unix": snap.get("stored_at_unix"),
+        "expires_at_unix": snap.get("expires_at_unix"),
+        "rows_count": snap.get("rows_count"),
     }
-    if include_rows:
-        out["rows"] = matched
-    return out
+    base["filters"] = {
+        "department_name": department_name,
+        "brand": brand,
+        "manufacturer": manufacturer,
+        "product_name": product_name,
+        "model": model,
+        "design": design,
+        "category": category,
+        "query": query,
+        "include_rows": include_rows,
+        "limit": limit,
+    }
+    return base
+
+
+@app.get("/product-search")
+async def product_search(
+    request: Request,
+    report_type: Optional[str] = None,
+    department_name: Optional[str] = None,
+    brand: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    product_name: Optional[str] = None,
+    model: Optional[str] = None,
+    design: Optional[str] = None,
+    category: Optional[str] = None,
+    query: Optional[str] = None,
+    include_rows: bool = False,
+    limit: int = 50,
+) -> Any:
+    """
+    Actions-friendly wrapper for snapshot row search.
+    Returns a small, stable JSON payload designed for GPT Actions.
+    """
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
+    if not snap:
+        return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
+    return _snapshot_search_impl(
+        snap=snap,
+        report_type=report_type,
+        department_name=department_name,
+        brand=brand,
+        manufacturer=manufacturer,
+        product_name=product_name,
+        model=model,
+        design=design,
+        category=category,
+        query=query,
+        include_rows=include_rows,
+        limit=limit,
+    )
 
 
 @app.get("/debug/optima/login-probe")

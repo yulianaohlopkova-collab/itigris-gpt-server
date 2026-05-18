@@ -587,6 +587,108 @@ paths:
                       type: object
                       additionalProperties: true
 
+  /product-search:
+    get:
+      operationId: productSearch
+      summary: Primary endpoint for detailed product stock questions (snapshot search)
+      description: >
+        Use this FIRST for questions like "сколько оправ UNITY бабочек на Ленина?".
+        This searches within remainGoodsReport snapshot rows (source of truth) and returns totals.
+        Do NOT use remoteRemains/list or count-by-filters for brand/model/design/material/product_name questions
+        when snapshot data is available.
+      parameters:
+        - name: report_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Тип товара (reportType).
+        - name: department_name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Департамент (например "Ленина, 7" или "Ленина").
+        - name: brand
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: manufacturer
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: product_name
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: model
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: design
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: query
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: include_rows
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 2000
+      responses:
+        "200":
+          description: Product search result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  source:
+                    type: string
+                  report_type:
+                    type: string
+                  matched_department:
+                    type: string
+                    nullable: true
+                  matched_rows_count:
+                    type: integer
+                  total_qty_units:
+                    type: integer
+                  total_qty_packs:
+                    type: integer
+                  total_value:
+                    type: number
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
   /contactlenses/remainGoodsReport/auto/status:
     get:
       operationId: contactlensesRemainGoodsReportAutoStatus
