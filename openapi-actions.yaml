@@ -15,19 +15,6 @@ security:
   - OdlServerToken: []
 
 paths:
-  /healthz:
-    get:
-      operationId: healthCheck
-      summary: Health check
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-
   /product-search:
     get:
       operationId: productSearch
@@ -108,7 +95,6 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [ok, source, matched_rows_count, total_qty_units, total_qty_packs, total_value]
                 properties:
                   ok:
                     type: boolean
@@ -127,40 +113,16 @@ paths:
                     type: integer
                   total_value:
                     type: number
+                  error:
+                    type: string
+                    nullable: true
                   rows:
                     type: array
                     items:
                       type: object
+                      properties: {}
                       additionalProperties: true
-
-  /contactlenses/stock/{department_name}:
-    get:
-      operationId: contactlensesStock
-      summary: "PRIMARY for MКЛ totals by department: remainGoodsReport snapshot (truth)"
-      description: >
-        Use for contact lenses (МКЛ) department totals questions WITHOUT product filters.
-        Prefer source=auto (snapshot truth when available).
-      parameters:
-        - name: department_name
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: source
-          in: query
-          required: false
-          schema:
-            type: string
-            default: auto
-          description: auto|snapshot|api
-      responses:
-        "200":
-          description: Department totals for contact lenses
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+                additionalProperties: false
 
   /contactlenses/remainGoodsReport/auto/refresh:
     post:
@@ -188,54 +150,41 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
-
-  /contactlenses/remainGoodsReport/snapshot:
-    get:
-      operationId: remainGoodsReportSnapshotGet
-      summary: Read current remainGoodsReport snapshot (metadata and optional rows)
-      description: >
-        Read the parsed snapshot. Use include_rows=false by default for metadata.
-        For filtering/detailed product questions use /product-search instead.
-      parameters:
-        - name: report_type
-          in: query
-          required: false
-          schema:
-            type: string
-          description: 'ITigris "Тип товара" (reportType).'
-        - name: include_rows
-          in: query
-          required: false
-          schema:
-            type: boolean
-            default: true
-      responses:
-        "200":
-          description: Snapshot
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-
-  /contactlenses/remainGoodsReport/snapshot/departments:
-    get:
-      operationId: remainGoodsReportSnapshotDepartments
-      summary: List departments present in the current snapshot
-      parameters:
-        - name: report_type
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Departments list
-          content:
-            application/json:
-              schema:
-                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  error:
+                    type: string
+                    nullable: true
+                  method:
+                    type: string
+                    nullable: true
+                  build_commit:
+                    type: string
+                    nullable: true
+                  report_type:
+                    type: string
+                    nullable: true
+                  filename:
+                    type: string
+                    nullable: true
+                  stored_at_unix:
+                    type: integer
+                    nullable: true
+                  expires_at_unix:
+                    type: integer
+                    nullable: true
+                  rows_count:
+                    type: integer
+                    nullable: true
+                  departments_count:
+                    type: integer
+                    nullable: true
+                  overall_summary:
+                    type: object
+                    nullable: true
+                    properties: {}
+                    additionalProperties: true
                 additionalProperties: true
 
 components:
