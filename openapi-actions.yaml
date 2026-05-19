@@ -18,7 +18,6 @@ paths:
   /healthz:
     get:
       operationId: healthCheck
-      security: []
       summary: Health check
       responses:
         "200":
@@ -27,6 +26,7 @@ paths:
             application/json:
               schema:
                 type: object
+                additionalProperties: true
 
   /product-search:
     get:
@@ -244,4 +244,3 @@ components:
       type: apiKey
       in: header
       name: X-ODL-Token
-
