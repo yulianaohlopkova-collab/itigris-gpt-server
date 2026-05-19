@@ -188,6 +188,7 @@ paths:
                 additionalProperties: true
 
 components:
+  schemas: {}
   securitySchemes:
     OdlServerToken:
       type: apiKey
