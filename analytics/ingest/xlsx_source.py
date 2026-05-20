@@ -42,6 +42,11 @@ def _looks_like_kpi_title(s: str) -> bool:
     # "ПОКАЗАТЕЛИ ..." and most KPI blocks are uppercase in the XLS.
     if any(ch.isalpha() for ch in t) and (t.upper() == t):
         return True
+    # Some sheets mix case in section titles (e.g., "ОПРАВЫ СТМ, 7 салонов").
+    tl = t.lower()
+    if tl.startswith(("оправы", "линзы", "солнцезащит", "контактные линзы", "аксессуары")):
+        if any(k in tl for k in [" стм", "продан", "фотохром", "по бренду", "по дизайну", "по типу", "по целевой"]):
+            return True
     return False
 
 
@@ -89,7 +94,7 @@ def extract_month_meta(ws: Any, month_label: str) -> MonthMeta:
     return MonthMeta(month=month_label, start=start, end=end, days=days, weeks=weeks)
 
 
-def extract_kpi_blocks(ws: Any) -> List[KPIBlock]:
+def extract_kpi_blocks(ws: Any, header_marker: str = "салон / показатель", advance_on_block: bool = True) -> List[KPIBlock]:
     max_r = 800
     max_c = 80
     blocks: List[KPIBlock] = []
@@ -100,7 +105,7 @@ def extract_kpi_blocks(ws: Any) -> List[KPIBlock]:
             title = first
             header_r: Optional[int] = None
             for rr in range(r + 1, min(r + 12, max_r) + 1):
-                if "салон / показатель" in _norm_l(_cell(ws, rr, 1)):
+                if header_marker in _norm_l(_cell(ws, rr, 1)):
                     header_r = rr
                     break
             if header_r is None:
@@ -120,18 +125,21 @@ def extract_kpi_blocks(ws: Any) -> List[KPIBlock]:
                         break
                     rr += 1
                     continue
-                if "салон / показатель" in _norm_l(vals[0]):
+                if header_marker in _norm_l(vals[0]):
                     break
                 # A new title might begin a new block; stop if we already collected data.
-                if _looks_like_kpi_title(vals[0]) and data:
+                # Some tables have uppercase values in the first column (e.g., brand names),
+                # so only treat it as a new title when the rest of the row is blank.
+                if _looks_like_kpi_title(vals[0]) and data and _is_blank_row(vals[1:]):
                     break
                 data.append(vals)
                 rr += 1
 
             if data:
                 blocks.append(KPIBlock(title=title, header=header, rows=data))
-                r = rr
-                continue
+                if advance_on_block:
+                    r = rr
+                    continue
         r += 1
     return blocks
 
@@ -161,6 +169,97 @@ def pick_kpis(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
     return out
 
 
+def _pick_first(blocks: List[KPIBlock], needles: List[str]) -> Optional[KPIBlock]:
+    def score(title: str) -> int:
+        tl = title.lower()
+        return sum(1 for n in needles if n in tl)
+
+    best_sc = 0
+    best: Optional[KPIBlock] = None
+    for b in blocks:
+        sc = score(b.title)
+        if sc > best_sc:
+            best_sc = sc
+            best = b
+    return best if best_sc > 0 else None
+
+
+def pick_frames_mix_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
+    """
+    Extract mix blocks for Frames (Оправы) sheet.
+    We keep them as KPIBlock so downstream renderers/signals can evolve without
+    changing ingestion again.
+    """
+    out: Dict[str, KPIBlock] = {}
+    stm = _pick_first(blocks, ["оправы стм"])
+    if stm:
+        out["stm_units"] = stm
+    by_brand = _pick_first(blocks, ["проданные оправы по бренду"])
+    if by_brand:
+        out["by_brand"] = by_brand
+    by_design = _pick_first(blocks, ["проданные оправы по дизайну"])
+    if by_design:
+        out["by_design"] = by_design
+    by_type = _pick_first(blocks, ["проданные оправы по типу"])
+    if by_type:
+        out["by_type"] = by_type
+    by_target = _pick_first(blocks, ["проданные оправы по целевой"])
+    if by_target:
+        out["by_target_group"] = by_target
+    avg_check = _pick_first(blocks, ["средний чек", "ср. чек", "ср чек", "чек"])
+    if avg_check:
+        out["avg_check"] = avg_check
+    return out
+
+
+def pick_lenses_mix_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
+    out: Dict[str, KPIBlock] = {}
+    by_brand = _pick_first(blocks, ["линзы", "по бренду"])
+    if by_brand:
+        out["by_brand"] = by_brand
+    by_manuf = _pick_first(blocks, ["линзы", "по производ"])
+    if by_manuf:
+        out["by_manufacturer"] = by_manuf
+    photo = _pick_first(blocks, ["фотохром"])
+    if photo:
+        out["photochromic"] = photo
+    return out
+
+
+def pick_people_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
+    """
+    Consultant/optometrist blocks: we keep generic picks by title keywords.
+    """
+    out: Dict[str, KPIBlock] = {}
+
+    def has_plan_fact_dev(b: KPIBlock) -> bool:
+        hl = " ".join(_norm_l(x) for x in (b.header or []))
+        return ("план" in hl) and ("факт" in hl) and ("отклон" in hl)
+
+    def pick_semantic(title_needles: List[str]) -> Optional[KPIBlock]:
+        # Prefer blocks that have PLAN/FACT/DEVIATION columns (used for trainer actions).
+        candidates = [b for b in blocks if all(n in _norm_l(b.title) for n in title_needles)]
+        ranked = sorted(candidates, key=lambda b: (has_plan_fact_dev(b), len(b.rows)), reverse=True)
+        for b in ranked:
+            if has_plan_fact_dev(b):
+                return b
+        return ranked[0] if ranked else None
+
+    lenses = pick_semantic(["продан", "линз"])
+    if lenses:
+        out["sold_lenses_consultants"] = lenses
+    frames = pick_semantic(["продан", "оправ"])
+    if frames:
+        out["sold_frames_consultants"] = frames
+    sunglasses = pick_semantic(["солнцезащ"])
+    if sunglasses:
+        out["sold_sunglasses_consultants"] = sunglasses
+    photo = pick_semantic(["фотохром"])
+    if photo:
+        out["photochromic_consultants"] = photo
+    return out
+
+
 @dataclass
 class XlsxDashboardSource:
     """
@@ -172,25 +271,53 @@ class XlsxDashboardSource:
     def load_month(self, month_label: str) -> MonthFacts:
         # For MVP v1 we read a fixed sheet name pattern.
         wb = openpyxl.load_workbook(self.xlsx_path, data_only=True, read_only=True)
-        sheet_name = f"показатели {month_label}"
-        if sheet_name not in wb.sheetnames:
-            raise ValueError(f"missing_sheet:{sheet_name}")
+        kpi_sheet = f"показатели {month_label}"
+        if kpi_sheet not in wb.sheetnames:
+            raise ValueError(f"missing_sheet:{kpi_sheet}")
 
-        ws = wb[sheet_name]
+        ws = wb[kpi_sheet]
         meta = extract_month_meta(ws, month_label=month_label)
         blocks = extract_kpi_blocks(ws)
         picked = pick_kpis(blocks)
+
+        mix_blocks: Dict[str, Any] = {}
+        # Frames mix
+        frames_sheet = f"оправы {month_label}"
+        if frames_sheet in wb.sheetnames:
+            ws_f = wb[frames_sheet]
+            # Frames sheets often contain nested blocks; do not skip over potential nested titles.
+            f_blocks = extract_kpi_blocks(ws_f, advance_on_block=False)
+            mix_blocks["frames"] = {"sheet": frames_sheet, "blocks": pick_frames_mix_blocks(f_blocks)}
+        # Lenses mix
+        lenses_sheet = f"линзы {month_label}"
+        if lenses_sheet in wb.sheetnames:
+            ws_l = wb[lenses_sheet]
+            l_blocks = extract_kpi_blocks(ws_l, advance_on_block=False)
+            mix_blocks["lenses"] = {"sheet": lenses_sheet, "blocks": pick_lenses_mix_blocks(l_blocks)}
+
+        people_blocks: Dict[str, Any] = {}
+        cons_sheet = f"консопто {month_label}"
+        if cons_sheet in wb.sheetnames:
+            ws_c = wb[cons_sheet]
+            # Consultant blocks use "КОНС / ПЕРИОД" marker, not "САЛОН / ПОКАЗАТЕЛЬ".
+            c_blocks = extract_kpi_blocks(ws_c, header_marker="конс / период")
+            people_blocks["consultants"] = {"sheet": cons_sheet, "blocks": pick_people_blocks(c_blocks)}
+        doctor_sheet = f"врач {month_label}"
+        if doctor_sheet in wb.sheetnames:
+            ws_d = wb[doctor_sheet]
+            d_blocks = extract_kpi_blocks(ws_d, advance_on_block=False)
+            # keep all blocks for now; we will pick later once we know stable titles.
+            people_blocks["doctor"] = {"sheet": doctor_sheet, "blocks_all": [b.title for b in d_blocks]}
 
         now = int(time.time())
         return MonthFacts(
             month_meta=meta,
             kpi_blocks_all=blocks,
             kpi_blocks_picked=picked,
-            mix_blocks={},
+            mix_blocks=mix_blocks,
             orders_blocks={},
-            people_blocks={},
+            people_blocks=people_blocks,
             source_type="xlsx_manual",
             source_id=self.xlsx_path,
             generated_at_unix=now,
         )
-

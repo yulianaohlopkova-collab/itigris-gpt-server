@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 from ..contracts import monthfacts_to_dict
 from ..ingest.xlsx_source import XlsxDashboardSource
+from ..monthly.pipeline import build_actions, build_signals
 from ..render.management_md import render_management_md
+from ..render.trainers_md import render_trainers_md
 
 
 def _default_out_dir(month_label: str) -> str:
@@ -44,9 +45,15 @@ def main() -> int:
     management_md = render_management_md(facts)
     (out_dir / "management.md").write_text(management_md, encoding="utf-8")
 
-    # signals are v1-stub for now; keep a file so downstream automation has a stable artifact name.
+    signals = build_signals(facts)
     signals_path = out_dir / f"signals_{args.month.replace('.', '_')}.json"
-    signals_path.write_text(json.dumps({"ok": True, "signals": []}, ensure_ascii=False, indent=2), encoding="utf-8")
+    signals_path.write_text(json.dumps(signals, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    trainers_md = render_trainers_md(facts, signals)
+    (out_dir / "trainers.md").write_text(trainers_md, encoding="utf-8")
+
+    actions = build_actions(facts, signals)
+    (out_dir / f"actions_{args.month.replace('.', '_')}.json").write_text(json.dumps(actions, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return 0
 

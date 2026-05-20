@@ -70,13 +70,22 @@ def monthfacts_to_dict(f: MonthFacts) -> Dict[str, Any]:
     def block(b: KPIBlock) -> Dict[str, Any]:
         return {"title": b.title, "header": list(b.header), "rows": [list(r) for r in b.rows]}
 
+    def convert_any(x: Any) -> Any:
+        if isinstance(x, KPIBlock):
+            return block(x)
+        if isinstance(x, list):
+            return [convert_any(v) for v in x]
+        if isinstance(x, dict):
+            return {str(k): convert_any(v) for k, v in x.items()}
+        return x
+
     return {
         "month_meta": meta(f.month_meta),
         "kpi_blocks_all": [block(b) for b in f.kpi_blocks_all],
         "kpi_blocks_picked": {k: block(v) for k, v in f.kpi_blocks_picked.items()},
-        "mix_blocks": f.mix_blocks,
-        "orders_blocks": f.orders_blocks,
-        "people_blocks": f.people_blocks,
+        "mix_blocks": convert_any(f.mix_blocks),
+        "orders_blocks": convert_any(f.orders_blocks),
+        "people_blocks": convert_any(f.people_blocks),
         "source": {
             "type": f.source_type,
             "id": f.source_id,
@@ -113,4 +122,3 @@ def monthfacts_from_dict(obj: Dict[str, Any]) -> MonthFacts:
         source_id=str(src.get("id") or ""),
         generated_at_unix=int(src.get("generated_at_unix") or 0),
     )
-

@@ -60,6 +60,61 @@ def _add_kpi_table(lines: List[str], title: str, block: KPIBlock, value_fmt) -> 
         lines.append(f"| {r[0]} | {value_fmt(plan)} | {value_fmt(fact)} | {_fmt_pct(dev)} |")
     lines.append("")
 
+def _maybe_add_frames_mix(lines: List[str], facts: MonthFacts) -> None:
+    frames = facts.mix_blocks.get("frames") if isinstance(facts.mix_blocks, dict) else None
+    if not isinstance(frames, dict):
+        return
+    blocks = frames.get("blocks")
+    if not isinstance(blocks, dict):
+        return
+    stm = blocks.get("stm_units")
+    by_brand = blocks.get("by_brand")
+    if not stm and not by_brand:
+        return
+    lines.append("## Mix — Оправы (v1)")
+    lines.append("")
+    if stm:
+        lines.append("**СТМ (штуки): факт за месяц + факт по неделям**")
+        lines.append("")
+        lines.append("| Бренд | Факт (мес) | I | II | III | IV | V |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        for r in stm.rows:
+            if not r or not r[0] or str(r[0]).lower().startswith("общее"):
+                continue
+            # header: salon/показатель | факт_мес | доля | факт I | доля I | факт II | ...
+            b = r[0]
+            fact_m = r[1] if len(r) > 1 else ""
+            w1 = r[3] if len(r) > 3 else ""
+            w2 = r[5] if len(r) > 5 else ""
+            w3 = r[7] if len(r) > 7 else ""
+            w4 = r[9] if len(r) > 9 else ""
+            w5 = r[11] if len(r) > 11 else ""
+            lines.append(f"| {b} | {_fmt_money(fact_m)} | {_fmt_money(w1)} | {_fmt_money(w2)} | {_fmt_money(w3)} | {_fmt_money(w4)} | {_fmt_money(w5)} |")
+        lines.append("")
+    if by_brand:
+        lines.append("**Проданные оправы по бренду (срез, если есть в дашборде)**")
+        lines.append("")
+        lines.append(f"- Block: {by_brand.title}")
+        lines.append("")
+
+
+def _maybe_add_lenses_mix(lines: List[str], facts: MonthFacts) -> None:
+    lenses = facts.mix_blocks.get("lenses") if isinstance(facts.mix_blocks, dict) else None
+    if not isinstance(lenses, dict):
+        return
+    blocks = lenses.get("blocks")
+    if not isinstance(blocks, dict):
+        return
+    photo = blocks.get("photochromic")
+    if not photo:
+        return
+    lines.append("## Mix — Линзы (v1)")
+    lines.append("")
+    lines.append("**Фотохромы (как есть в дашборде)**")
+    lines.append("")
+    lines.append(f"- Block: {photo.title}")
+    lines.append("")
+
 
 def render_management_md(facts: MonthFacts) -> str:
     meta = facts.month_meta
@@ -98,6 +153,9 @@ def render_management_md(facts: MonthFacts) -> str:
         _add_kpi_table(lines, "Средний доход от клиента", inc, _fmt_money)
     if conv:
         _add_kpi_table(lines, "Конверсия (продажа/посетитель)", conv, _fmt_pct)
+
+    _maybe_add_frames_mix(lines, facts)
+    _maybe_add_lenses_mix(lines, facts)
 
     lines.append("## Notes")
     lines.append("")
