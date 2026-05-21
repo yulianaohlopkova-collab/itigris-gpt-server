@@ -136,6 +136,10 @@ def render_trainers_md(facts: MonthFacts, signals: Dict[str, Any]) -> str:
     lines.append("## Notes")
     lines.append("")
     lines.append(f"- Source: {facts.source_type} ({facts.source_id})")
+    lenses_pack = (facts.mix_blocks or {}).get("lenses") if isinstance(facts.mix_blocks, dict) else None
+    if isinstance(lenses_pack, dict) and isinstance(lenses_pack.get("source"), dict):
+        src = lenses_pack["source"]
+        lines.append(f"- Линзы: fallback source = {src.get('type')} ({src.get('id')} :: {src.get('entry')})")
     lines.append("- Это тренерский вывод v1; уточним метрики/триггеры после 1–2 циклов применения.")
     lines.append("")
     return "\n".join(lines)

@@ -58,6 +58,38 @@ def build_signals(facts: MonthFacts) -> Dict[str, Any]:
     add_top_deltas(picked.get("revenue"), "revenue", "deviation_pct")
     add_top_deltas(picked.get("conversion"), "conversion", "deviation_pct")
 
+    # Lenses mix (v1): if we have a photochromic-by-department block, surface top/bottom salons by revenue.
+    try:
+        lenses_pack = (facts.mix_blocks or {}).get("lenses") or {}
+        lenses_blocks = lenses_pack.get("blocks") if isinstance(lenses_pack, dict) else {}
+        photo_blk = None
+        if isinstance(lenses_blocks, dict):
+            photo_blk = lenses_blocks.get("photochromic_by_department_brand") or lenses_blocks.get("photochromic")
+        if photo_blk and getattr(photo_blk, "rows", None):
+            agg: Dict[str, Dict[str, float]] = {}
+            for r in photo_blk.rows:
+                if not r or not r[0]:
+                    continue
+                name = str(r[0]).strip()
+                # Expected row shape: [dept, brand, sum_rub, share_pct, count, avg_rub]
+                sum_v = _safe_float(r[2] if len(r) > 2 else None)
+                cnt_v = _safe_float(r[4] if len(r) > 4 else None)
+                if sum_v is None:
+                    continue
+                a = agg.setdefault(name, {"sum_rub": 0.0, "count": 0.0})
+                a["sum_rub"] += float(sum_v)
+                a["count"] += float(cnt_v or 0.0)
+            if agg:
+                items_sorted = sorted(
+                    [{"name": k, "sum_rub": v["sum_rub"], "count": v["count"]} for k, v in agg.items()],
+                    key=lambda x: x["sum_rub"],
+                    reverse=True,
+                )
+                out["signals"].append({"type": "lenses_photochromic_top", "key": "lenses_photochromic", "metric": "sum_rub", "items": items_sorted[:5]})
+                out["signals"].append({"type": "lenses_photochromic_bottom", "key": "lenses_photochromic", "metric": "sum_rub", "items": list(reversed(items_sorted[-5:]))})
+    except Exception:
+        pass
+
     # Consultant blocks: we treat column 3 as absolute deviation for the month.
     cons = (facts.people_blocks.get("consultants") or {}).get("blocks") if isinstance(facts.people_blocks.get("consultants"), dict) else None
     if isinstance(cons, dict):
@@ -130,6 +162,17 @@ def build_actions(facts: MonthFacts, signals: Dict[str, Any]) -> Dict[str, Any]:
                     due=f"{month} + 10d",
                     kpi_check="Факт vs план по категории на следующей неделе",
                     rationale="Сигнал v1: худшие отклонения по консультантам/оптометристам.",
+                )
+
+        if s.get("type") == "lenses_photochromic_bottom":
+            items = s.get("items") or []
+            if items:
+                mk(
+                    owner="Коммерческий директор",
+                    title=f"Фотохромы (ОЛ): разобрать просадку по салонам: {', '.join([i['name'] for i in items[:3]])}",
+                    due=f"{month} + 10d",
+                    kpi_check="Фотохромы: выручка и кол-во по салонам (следующая неделя)",
+                    rationale="Сигнал v1: нижние салоны по выручке фотохромных ОЛ.",
                 )
 
     return {"month": month, "actions": actions}

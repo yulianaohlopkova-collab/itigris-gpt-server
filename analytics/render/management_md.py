@@ -105,15 +105,85 @@ def _maybe_add_lenses_mix(lines: List[str], facts: MonthFacts) -> None:
     blocks = lenses.get("blocks")
     if not isinstance(blocks, dict):
         return
-    photo = blocks.get("photochromic")
-    if not photo:
+    # XLS path: photochromic/by_manufacturer/by_brand
+    # HTML zip fallback: *_by_department_brand, by_manufacturer_brand
+    # PDF fallback: *_pdf
+    photo = (
+        blocks.get("photochromic")
+        or blocks.get("photochromic_by_department_brand")
+        or blocks.get("photochromic_by_department_pdf")
+    )
+    manuf = blocks.get("by_manufacturer") or blocks.get("by_manufacturer_brand") or blocks.get("by_manufacturer_pdf")
+    dept = blocks.get("by_department_brand") or blocks.get("by_department_pdf")
+    brand = blocks.get("by_brand") or blocks.get("by_brand_pdf")
+
+    if not (photo or manuf or dept or brand):
         return
+
     lines.append("## Mix — Линзы (v1)")
     lines.append("")
-    lines.append("**Фотохромы (как есть в дашборде)**")
-    lines.append("")
-    lines.append(f"- Block: {photo.title}")
-    lines.append("")
+
+    if photo:
+        lines.append("**Фотохромы: по салонам (выручка)**")
+        lines.append("")
+        lines.append("| Салон | Выручка, руб | Доля | Кол-во | Ср. чек, руб |")
+        lines.append("|---|---:|---:|---:|---:|")
+        # photo rows may be by (dept,brand). Aggregate by dept.
+        agg = {}
+        for r in photo.rows:
+            if not r or not r[0] or str(r[0]).lower().startswith("общее"):
+                continue
+            d = r[0]
+            s = r[2] if len(r) > 2 else r[1]  # HTML uses [dept,brand,sum,...]
+            cnt = r[4] if len(r) > 4 else r[3]
+            try:
+                sv = float(str(s).replace(" ", "").replace("\u00a0", "").replace(",", "."))
+            except Exception:
+                continue
+            try:
+                cv = float(str(cnt).replace(" ", "").replace("\u00a0", "").replace(",", "."))
+            except Exception:
+                cv = 0.0
+            a = agg.setdefault(d, {"sum": 0.0, "cnt": 0.0})
+            a["sum"] += sv
+            a["cnt"] += cv
+        for d, a in sorted(agg.items(), key=lambda kv: kv[1]["sum"], reverse=True)[:15]:
+            avg = (a["sum"] / a["cnt"]) if a["cnt"] else 0.0
+            lines.append(f"| {d} | {_fmt_money(a['sum'])} |  | {int(a['cnt']) if a['cnt'].is_integer() else a['cnt']} | {_fmt_money(avg)} |")
+        lines.append("")
+
+    if manuf:
+        lines.append("**Производители: топ по выручке (ОЛ)**")
+        lines.append("")
+        lines.append("| Производитель | Выручка, руб | Доля | Кол-во | Ср. чек, руб |")
+        lines.append("|---|---:|---:|---:|---:|")
+        # manuf may be by (manufacturer,brand). Aggregate by manufacturer.
+        agg = {}
+        for r in manuf.rows:
+            if not r or not r[0] or str(r[0]).lower().startswith("общее"):
+                continue
+            name = r[0]
+            s = r[2] if len(r) > 2 else r[1]
+            cnt = r[4] if len(r) > 4 else r[3]
+            try:
+                sv = float(str(s).replace(" ", "").replace("\u00a0", "").replace(",", "."))
+            except Exception:
+                continue
+            try:
+                cv = float(str(cnt).replace(" ", "").replace("\u00a0", "").replace(",", "."))
+            except Exception:
+                cv = 0.0
+            a = agg.setdefault(name, {"sum": 0.0, "cnt": 0.0})
+            a["sum"] += sv
+            a["cnt"] += cv
+        for name, a in sorted(agg.items(), key=lambda kv: kv[1]["sum"], reverse=True)[:15]:
+            avg = (a["sum"] / a["cnt"]) if a["cnt"] else 0.0
+            lines.append(f"| {name} | {_fmt_money(a['sum'])} |  | {int(a['cnt']) if a['cnt'].is_integer() else a['cnt']} | {_fmt_money(avg)} |")
+        lines.append("")
+
+    if brand:
+        lines.append(f"- Блок брендов линз: {brand.title}")
+        lines.append("")
 
 
 def render_management_md(facts: MonthFacts) -> str:
@@ -161,6 +231,10 @@ def render_management_md(facts: MonthFacts) -> str:
     lines.append("")
     lines.append(f"- Source: {facts.source_type} ({facts.source_id})")
     lines.append("- Это MVP v1: 3–5 KPI из листа `показатели 05.2026` + сигналы по отклонениям.")
-    lines.append("- Mix (Оправы СТМ / Фотохромы / Better-Best) будет добавлен следующим шагом из листов `оправы 05.2026` и `линзы 05.2026`.")
+    lenses_pack = (facts.mix_blocks or {}).get("lenses") if isinstance(facts.mix_blocks, dict) else None
+    if isinstance(lenses_pack, dict) and isinstance(lenses_pack.get("source"), dict):
+        src = lenses_pack["source"]
+        lines.append(f"- Линзы: fallback source = {src.get('type')} ({src.get('id')} :: {src.get('entry')})")
+    lines.append("- Линзы v1: если в XLS нет рассчитанных значений, используем HTML-экспорт из zip (без PDF-парсинга).")
     lines.append("")
     return "\n".join(lines)

@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
+import io
+import zipfile
+import re
 
 from ..contracts import KPIBlock, MonthFacts, MonthMeta, WeekMeta
 
@@ -35,14 +38,12 @@ def _is_blank_row(vals: List[str]) -> bool:
 
 def _looks_like_kpi_title(s: str) -> bool:
     t = _norm(s)
-    if not t:
+    if not t or len(t) < 4:
         return False
-    if len(t) < 4:
-        return False
-    # "ПОКАЗАТЕЛИ ..." and most KPI blocks are uppercase in the XLS.
+    # Most KPI blocks are uppercase in XLS exports.
     if any(ch.isalpha() for ch in t) and (t.upper() == t):
         return True
-    # Some sheets mix case in section titles (e.g., "ОПРАВЫ СТМ, 7 салонов").
+    # Some sheets use mixed-case section titles (e.g. "ОПРАВЫ СТМ, 7 салонов").
     tl = t.lower()
     if tl.startswith(("оправы", "линзы", "солнцезащит", "контактные линзы", "аксессуары")):
         if any(k in tl for k in [" стм", "продан", "фотохром", "по бренду", "по дизайну", "по типу", "по целевой"]):
@@ -51,7 +52,6 @@ def _looks_like_kpi_title(s: str) -> bool:
 
 
 def extract_month_meta(ws: Any, month_label: str) -> MonthMeta:
-    # Find the row that contains "Технические данные для расчетов"
     anchor_r: Optional[int] = None
     for r in range(1, 80):
         if "технические данные" in _norm_l(_cell(ws, r, 1)):
@@ -127,9 +127,7 @@ def extract_kpi_blocks(ws: Any, header_marker: str = "салон / показа�
                     continue
                 if header_marker in _norm_l(vals[0]):
                     break
-                # A new title might begin a new block; stop if we already collected data.
-                # Some tables have uppercase values in the first column (e.g., brand names),
-                # so only treat it as a new title when the rest of the row is blank.
+                # Some tables have uppercase values in the first column (e.g., brand names).
                 if _looks_like_kpi_title(vals[0]) and data and _is_blank_row(vals[1:]):
                     break
                 data.append(vals)
@@ -150,7 +148,6 @@ def pick_kpis(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
         return sum(1 for n in needles if n in tl)
 
     wanted = {
-        # The sheet uses "ПОКАЗАТЕЛИ ПРОДАЖ ..." as the revenue block header.
         "revenue": ["выруч", "показатели продаж"],
         "avg_order_check": ["средний чек", "ср чек", "средняя сумма", "чек заказа", "чек на очки"],
         "avg_income_per_client": ["средний доход", "доход от клиента"],
@@ -185,11 +182,6 @@ def _pick_first(blocks: List[KPIBlock], needles: List[str]) -> Optional[KPIBlock
 
 
 def pick_frames_mix_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
-    """
-    Extract mix blocks for Frames (Оправы) sheet.
-    We keep them as KPIBlock so downstream renderers/signals can evolve without
-    changing ingestion again.
-    """
     out: Dict[str, KPIBlock] = {}
     stm = _pick_first(blocks, ["оправы стм"])
     if stm:
@@ -214,22 +206,175 @@ def pick_frames_mix_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
 
 def pick_lenses_mix_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
     out: Dict[str, KPIBlock] = {}
-    by_brand = _pick_first(blocks, ["линзы", "по бренду"])
-    if by_brand:
-        out["by_brand"] = by_brand
-    by_manuf = _pick_first(blocks, ["линзы", "по производ"])
+    # Lenses sheet often uses "ОЛ" wording.
+    by_manuf = _pick_first(blocks, ["по созданным", "производ"])
     if by_manuf:
         out["by_manufacturer"] = by_manuf
+    by_brand = _pick_first(blocks, ["по бренду"])
+    if by_brand:
+        out["by_brand"] = by_brand
     photo = _pick_first(blocks, ["фотохром"])
     if photo:
         out["photochromic"] = photo
     return out
 
 
+def _parse_lenses_pdf_mix(pdf_path: str) -> Dict[str, KPIBlock]:
+    """
+    PDF parsing is intentionally disabled in analytics v1.
+    It's brittle and we prefer XLS values, with a ZIP/HTML fallback when needed.
+    """
+    _ = pdf_path
+    return {}
+
+
+def _parse_lenses_zip_html_mix(zip_path: str, month_label: str) -> Dict[str, Any]:
+    """
+    Preferred v1 fallback for lenses: parse Google-Sheets HTML export from a zip.
+    Returns a dict with:
+      - source: {type,id,entry}
+      - blocks: {by_manufacturer_brand, by_department_brand, photochromic_by_department_brand}
+    """
+    entry = f"линзы {month_label}.html"
+    try:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            if entry not in z.namelist():
+                return {}
+            html = z.read(entry).decode("utf-8", "ignore")
+    except Exception:
+        return {}
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table")
+    if table is None:
+        return {}
+
+    def parse_table_grid(tbl) -> List[List[str]]:
+        grid: List[List[str]] = []
+        spans: Dict[Tuple[int, int], Tuple[int, str]] = {}
+
+        rows = tbl.find_all("tr")
+        for r_i, tr in enumerate(rows):
+            cells = tr.find_all(["td", "th"])
+            row: List[str] = []
+            c_i = 0
+
+            def take_span() -> Optional[str]:
+                nonlocal c_i
+                v = spans.get((r_i, c_i))
+                if not v:
+                    return None
+                remaining, val = v
+                if remaining > 1:
+                    spans[(r_i + 1, c_i)] = (remaining - 1, val)
+                del spans[(r_i, c_i)]
+                return val
+
+            for cell in cells:
+                while True:
+                    sv = take_span()
+                    if sv is None:
+                        break
+                    row.append(sv)
+                    c_i += 1
+
+                txt = cell.get_text(" ", strip=True).replace("\u00a0", " ")
+                rs = int(cell.get("rowspan") or 1)
+                cs = int(cell.get("colspan") or 1)
+                for _ in range(cs):
+                    row.append(txt)
+                if rs > 1:
+                    for k in range(cs):
+                        spans[(r_i + 1, c_i + k)] = (rs - 1, txt)
+                c_i += cs
+
+            while True:
+                sv = take_span()
+                if sv is None:
+                    break
+                row.append(sv)
+                c_i += 1
+
+            while row and not row[-1]:
+                row.pop()
+            grid.append([_norm(x) for x in row])
+        return grid
+
+    grid = parse_table_grid(table)
+    if len(grid) < 6:
+        return {}
+
+    # Find a header row near the top. In 05.2026 exports it is usually row 3 (0-based),
+    # but we search for a known token to be more robust.
+    r_header = None
+    for i in range(min(80, len(grid))):
+        if grid[i] and "салон / показатель" in _norm_l(grid[i][0]):
+            r_header = i
+            break
+    if r_header is None:
+        r_header = 3
+
+    def cell(r: int, c: int) -> str:
+        if r < 0 or r >= len(grid):
+            return ""
+        row = grid[r]
+        if c < 0 or c >= len(row):
+            return ""
+        return row[c]
+
+    manuf_cols = list(range(1, 7))   # B..G
+    dept_cols = list(range(9, 15))   # J..O
+    photo_cols = list(range(17, 23)) # R..W
+
+    def block_from_cols(title: str, first_col_name: str, cols: List[int]) -> KPIBlock:
+        header = [first_col_name, "brand", "sum_rub", "share_pct", "count", "avg_rub"]
+        rows: List[List[str]] = []
+        last_first = ""
+        for r in range(r_header + 1, len(grid)):
+            vals = [cell(r, c) for c in cols]
+            if not any(v for v in vals):
+                continue
+            first_raw = vals[0]
+            first = first_raw or last_first
+            if first_raw:
+                last_first = first_raw
+            if first_raw and _looks_like_kpi_title(first_raw) and rows:
+                break
+            if not first:
+                continue
+            fl = first.lower()
+            # Skip subtotal/header-like rows from the HTML export.
+            if fl.startswith(("общий", "итого", "всего")):
+                continue
+            rows.append([first, vals[1], vals[2], vals[3], vals[4], vals[5]])
+        return KPIBlock(title=title, header=header, rows=rows)
+
+    blocks: Dict[str, KPIBlock] = {}
+    blocks["by_manufacturer_brand"] = block_from_cols(
+        "ПРОДАННЫЕ ОЛ (HTML) — производители/бренды",
+        "manufacturer",
+        manuf_cols,
+    )
+    blocks["by_department_brand"] = block_from_cols(
+        "ПРОДАННЫЕ ОЛ (HTML) — салоны/бренды",
+        "department",
+        dept_cols,
+    )
+    blocks["photochromic_by_department_brand"] = block_from_cols(
+        "ПРОДАННЫЕ ФОТОХРОМНЫЕ ОЛ (HTML) — салоны/бренды",
+        "department",
+        photo_cols,
+    )
+
+    return {
+        "source": {"type": "zip_html", "id": zip_path, "entry": entry},
+        "blocks": blocks,
+    }
+
+
 def pick_people_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
-    """
-    Consultant/optometrist blocks: we keep generic picks by title keywords.
-    """
     out: Dict[str, KPIBlock] = {}
 
     def has_plan_fact_dev(b: KPIBlock) -> bool:
@@ -237,7 +382,6 @@ def pick_people_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
         return ("план" in hl) and ("факт" in hl) and ("отклон" in hl)
 
     def pick_semantic(title_needles: List[str]) -> Optional[KPIBlock]:
-        # Prefer blocks that have PLAN/FACT/DEVIATION columns (used for trainer actions).
         candidates = [b for b in blocks if all(n in _norm_l(b.title) for n in title_needles)]
         ranked = sorted(candidates, key=lambda b: (has_plan_fact_dev(b), len(b.rows)), reverse=True)
         for b in ranked:
@@ -262,14 +406,11 @@ def pick_people_blocks(blocks: List[KPIBlock]) -> Dict[str, KPIBlock]:
 
 @dataclass
 class XlsxDashboardSource:
-    """
-    v1 ingestion source: manual XLSX export from ODL dashboard.
-    """
+    """v1 ingestion source: manual XLSX export from ODL dashboard."""
 
     xlsx_path: str
 
     def load_month(self, month_label: str) -> MonthFacts:
-        # For MVP v1 we read a fixed sheet name pattern.
         wb = openpyxl.load_workbook(self.xlsx_path, data_only=True, read_only=True)
         kpi_sheet = f"показатели {month_label}"
         if kpi_sheet not in wb.sheetnames:
@@ -281,32 +422,40 @@ class XlsxDashboardSource:
         picked = pick_kpis(blocks)
 
         mix_blocks: Dict[str, Any] = {}
-        # Frames mix
+
         frames_sheet = f"оправы {month_label}"
         if frames_sheet in wb.sheetnames:
             ws_f = wb[frames_sheet]
-            # Frames sheets often contain nested blocks; do not skip over potential nested titles.
             f_blocks = extract_kpi_blocks(ws_f, advance_on_block=False)
             mix_blocks["frames"] = {"sheet": frames_sheet, "blocks": pick_frames_mix_blocks(f_blocks)}
-        # Lenses mix
+
         lenses_sheet = f"линзы {month_label}"
         if lenses_sheet in wb.sheetnames:
             ws_l = wb[lenses_sheet]
             l_blocks = extract_kpi_blocks(ws_l, advance_on_block=False)
-            mix_blocks["lenses"] = {"sheet": lenses_sheet, "blocks": pick_lenses_mix_blocks(l_blocks)}
+            lens_mix = pick_lenses_mix_blocks(l_blocks)
+            # If XLS has no cached values, fall back to HTML export from the dashboard zip (preferred),
+            # then PDF as last resort (currently unused in v1 output).
+            lenses_pack: Dict[str, Any] = {"sheet": lenses_sheet, "blocks": lens_mix}
+            if not lens_mix:
+                zip_path = "/Users/roomofpromise/Downloads/ODL. Дашборд.zip"
+                html_pack = _parse_lenses_zip_html_mix(zip_path, month_label=month_label)
+                if html_pack:
+                    lenses_pack["blocks"] = html_pack["blocks"]
+                    lenses_pack["source"] = html_pack["source"]
+            mix_blocks["lenses"] = lenses_pack
 
         people_blocks: Dict[str, Any] = {}
         cons_sheet = f"консопто {month_label}"
         if cons_sheet in wb.sheetnames:
             ws_c = wb[cons_sheet]
-            # Consultant blocks use "КОНС / ПЕРИОД" marker, not "САЛОН / ПОКАЗАТЕЛЬ".
             c_blocks = extract_kpi_blocks(ws_c, header_marker="конс / период")
             people_blocks["consultants"] = {"sheet": cons_sheet, "blocks": pick_people_blocks(c_blocks)}
+
         doctor_sheet = f"врач {month_label}"
         if doctor_sheet in wb.sheetnames:
             ws_d = wb[doctor_sheet]
             d_blocks = extract_kpi_blocks(ws_d, advance_on_block=False)
-            # keep all blocks for now; we will pick later once we know stable titles.
             people_blocks["doctor"] = {"sheet": doctor_sheet, "blocks_all": [b.title for b in d_blocks]}
 
         now = int(time.time())
