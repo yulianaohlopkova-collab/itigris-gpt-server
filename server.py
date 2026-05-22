@@ -4261,11 +4261,17 @@ def _snapshot_search_impl(
         return needle in hay
 
     matched: List[Dict[str, Any]] = []
+    matched_count = 0
     total_units = 0
     total_packs = 0
     total_value = 0.0
 
-    hard_limit = max(1, min(int(limit or 200), 2000))
+    # IMPORTANT:
+    # - Totals and matched_rows_count must be computed across ALL matched rows.
+    # - `limit` only affects returned `rows` when include_rows=True.
+    hard_limit: Optional[int] = None
+    if include_rows:
+        hard_limit = max(1, min(int(limit or 200), 2000))
     for r in rows:
         if dep_filter and _norm_text(r.get("department")) != _norm_text(dep_filter):
             continue
@@ -4284,19 +4290,19 @@ def _snapshot_search_impl(
         if not _row_matches_query(r, q):
             continue
 
+        matched_count += 1
         total_units += int(parse_float(r.get("qty_units")) or 0)
         total_packs += int(parse_float(r.get("qty_packs")) or 0)
         total_value += float(parse_float(r.get("value")) or 0.0)
-        matched.append(r)
-        if len(matched) >= hard_limit:
-            break
+        if include_rows and hard_limit is not None and len(matched) < hard_limit:
+            matched.append(r)
 
     out: Dict[str, Any] = {
         "ok": True,
         "source": "remainGoodsReport snapshot",
         "report_type": snap.get("report_type") or report_type,
         "matched_department": dep_filter if department_name else None,
-        "matched_rows_count": len(matched),
+        "matched_rows_count": matched_count,
         "total_qty_units": total_units,
         "total_qty_packs": total_packs,
         "total_value": round(total_value, 2),
