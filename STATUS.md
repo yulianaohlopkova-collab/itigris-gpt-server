@@ -65,3 +65,33 @@ The goal is to swap only the ingestion layer while preserving:
 - renderers
 - signals/actions engine
 
+## Data Needed Next (v2)
+
+To move from manual exports (v1) to auto-ingestion (v2) without rewriting analytics logic, we need a stable
+programmatic export for the same logical blocks currently consumed from XLS/HTML:
+
+1. Month meta:
+   - month start/end
+   - weeks I..V start/end (as currently used in the dashboard)
+
+2. KPI blocks (plan/fact/deviation) by salon for the month:
+   - revenue
+   - average order check
+   - average income per client
+   - conversion (if available/stable)
+
+3. Mix blocks:
+   - Frames (Оправы): STM units + weekly breakdown (I..V)
+   - Lenses (Линзы): photochromic and manufacturer/brand and salon breakdowns
+
+4. People blocks:
+   - consultants/opto: plan/fact/deviation by key categories (frames, lenses, sunglasses, photochromic)
+
+Preferred export formats (best to worst):
+1. CSV/XLSX export endpoint (DataLens/BI) with values (not formulas only).
+2. HTML table export (like the current ZIP fallback).
+3. PDF export (explicitly not preferred).
+
+Minimal artifacts needed from ITigris/DataLens:
+- One export per month (e.g. `05.2026`) that includes the same blocks, OR separate exports per sheet/section with
+  a deterministic naming convention.
