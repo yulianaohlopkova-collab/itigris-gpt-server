@@ -24,7 +24,22 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from analytics import analyze_dataset, load_input_folder
+# NOTE: This repository has BOTH:
+# - a package directory `analytics/` (sales analytics engine), and
+# - a legacy module file `analytics.py` (dataset analyzer used by server endpoints).
+# Python prefers the package, so `import analytics` would resolve to `analytics/` and
+# break imports expecting functions from `analytics.py`.
+# Load the legacy module explicitly by path to keep backward compatibility.
+import importlib.util as _importlib_util
+
+_legacy_analytics_path = Path(__file__).with_name("analytics.py")
+_legacy_spec = _importlib_util.spec_from_file_location("analytics_legacy", _legacy_analytics_path)
+if _legacy_spec is None or _legacy_spec.loader is None:
+    raise ImportError(f"failed_to_load_legacy_analytics:{_legacy_analytics_path}")
+_legacy_mod = _importlib_util.module_from_spec(_legacy_spec)
+_legacy_spec.loader.exec_module(_legacy_mod)
+analyze_dataset = _legacy_mod.analyze_dataset
+load_input_folder = _legacy_mod.load_input_folder
 
 
 app = FastAPI(
