@@ -4280,6 +4280,8 @@ def _snapshot_search_impl(
     include_rows: bool,
     limit: int,
     group_by: Optional[str] = None,
+    debug: bool = False,
+    debug_limit: int = 200,
 ) -> Dict[str, Any]:
     rows = list(snap.get("rows") or [])
     dep_filter = (department_name or "").strip()
@@ -4313,6 +4315,30 @@ def _snapshot_search_impl(
     total_packs = 0
     total_value = 0.0
     breakdown: Dict[str, Dict[str, Any]] = {}
+    debug_row_ids: List[str] = []
+
+    import hashlib
+
+    def _row_id(rr: Dict[str, Any]) -> str:
+        # Deterministic id for matched-set verification.
+        # Use department + stable identity-ish fields + raw_text as last resort.
+        parts = [
+            str(rr.get("department") or "").strip(),
+            str(rr.get("manufacturer") or "").strip(),
+            str(rr.get("brand") or "").strip(),
+            str(rr.get("model") or "").strip(),
+            str(rr.get("product_name") or "").strip(),
+            str(rr.get("design") or "").strip(),
+            str(rr.get("purpose") or rr.get("target_group") or "").strip(),
+            str(rr.get("material") or "").strip(),
+            str(rr.get("type") or "").strip(),
+            str(rr.get("color") or "").strip(),
+            str(rr.get("size") or "").strip(),
+            str(rr.get("sku") or "").strip(),
+            str(rr.get("raw_text") or "").strip(),
+        ]
+        blob = "|".join(parts).encode("utf-8", "ignore")
+        return hashlib.sha1(blob).hexdigest()
 
     # IMPORTANT:
     # - Totals and matched_rows_count must be computed across ALL matched rows.
@@ -4351,6 +4377,8 @@ def _snapshot_search_impl(
         total_units += int(parse_float(r.get("qty_units")) or 0)
         total_packs += int(parse_float(r.get("qty_packs")) or 0)
         total_value += float(parse_float(r.get("value")) or 0.0)
+        if debug and len(debug_row_ids) < max(1, min(int(debug_limit or 200), 5000)):
+            debug_row_ids.append(_row_id(r))
         if g:
             if g in {"target_group", "purpose"}:
                 k = (r.get("target_group") or r.get("purpose") or "").strip()
@@ -4358,6 +4386,9 @@ def _snapshot_search_impl(
                 k = (r.get(g) or "").strip()
             if not k:
                 k = "(нет данных)"
+            else:
+                # Stable grouping: normalize whitespace only (no semantic rewriting).
+                k = " ".join(k.replace("\u00a0", " ").split())
             b = breakdown.setdefault(
                 k,
                 {"key": k, "matched_rows_count": 0, "total_qty_units": 0, "total_qty_packs": 0, "total_value": 0.0},
@@ -4391,8 +4422,19 @@ def _snapshot_search_impl(
             }
             for v in sorted(breakdown.values(), key=lambda x: float(x.get("total_qty_units") or 0), reverse=True)
         ]
+        out["grouped_row_count"] = sum(int(v.get("matched_rows_count") or 0) for v in breakdown.values())
     if include_rows:
         out["rows"] = matched
+    if debug:
+        # Checksum of the matched set for deterministic verification.
+        # Use sorted ids so order doesn't matter.
+        h = hashlib.sha256(("\n".join(sorted(debug_row_ids))).encode("utf-8", "ignore")).hexdigest()
+        out["debug"] = {
+            "matched_row_count_before_grouping": matched_count,
+            "grouped_row_count": out.get("grouped_row_count") if g else None,
+            "exact_matched_row_ids": debug_row_ids,
+            "matched_set_checksum_sha256": h,
+        }
     return out
 
 
@@ -4415,6 +4457,8 @@ async def contactlenses_remain_goods_report_snapshot_search(
     include_rows: bool = False,
     limit: int = 200,
     group_by: Optional[str] = None,
+    debug: bool = False,
+    debug_limit: int = 200,
 ) -> Any:
     """
     Search within the parsed remainGoodsReport snapshot rows.
@@ -4446,6 +4490,8 @@ async def contactlenses_remain_goods_report_snapshot_search(
         include_rows=include_rows,
         limit=limit,
         group_by=group_by,
+        debug=debug,
+        debug_limit=debug_limit,
     )
     # Keep the richer fields for the existing endpoint.
     base["snapshot"] = {
@@ -4470,6 +4516,8 @@ async def contactlenses_remain_goods_report_snapshot_search(
         "include_rows": include_rows,
         "limit": limit,
         "group_by": group_by,
+        "debug": debug,
+        "debug_limit": debug_limit,
     }
     return base
 
@@ -4493,6 +4541,8 @@ async def product_search(
     include_rows: bool = False,
     limit: int = 50,
     group_by: Optional[str] = None,
+    debug: bool = False,
+    debug_limit: int = 200,
 ) -> Any:
     """
     Actions-friendly wrapper for snapshot row search.
@@ -4522,6 +4572,8 @@ async def product_search(
         include_rows=include_rows,
         limit=limit,
         group_by=group_by,
+        debug=debug,
+        debug_limit=debug_limit,
     )
     # Proof block for Actions/management use-cases.
     base["snapshot"] = {
@@ -4547,6 +4599,8 @@ async def product_search(
         "group_by": group_by,
         "include_rows": include_rows,
         "limit": limit if include_rows else None,
+        "debug": debug,
+        "debug_limit": debug_limit,
     }
     return base
 
