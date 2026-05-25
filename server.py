@@ -4249,10 +4249,15 @@ def _snapshot_search_impl(
     product_name: Optional[str],
     model: Optional[str],
     design: Optional[str],
+    target_group: Optional[str] = None,
+    material: Optional[str] = None,
+    type_: Optional[str] = None,
+    color: Optional[str] = None,
     category: Optional[str],
     query: Optional[str],
     include_rows: bool,
     limit: int,
+    group_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     rows = list(snap.get("rows") or [])
     dep_filter = (department_name or "").strip()
@@ -4267,7 +4272,12 @@ def _snapshot_search_impl(
     f_name = _norm_text(product_name)
     f_model = _norm_text(model)
     f_design = _norm_text(design)
+    f_tg = _norm_text(target_group)
+    f_mat = _norm_text(material)
+    f_type = _norm_text(type_)
+    f_color = _norm_text(color)
     f_cat = _norm_text(category)
+    g = _norm_text(group_by)
 
     def _contains(field_val: Any, needle: str) -> bool:
         if not needle:
@@ -4280,6 +4290,7 @@ def _snapshot_search_impl(
     total_units = 0
     total_packs = 0
     total_value = 0.0
+    breakdown: Dict[str, Dict[str, Any]] = {}
 
     # IMPORTANT:
     # - Totals and matched_rows_count must be computed across ALL matched rows.
@@ -4300,6 +4311,15 @@ def _snapshot_search_impl(
             continue
         if not _contains(r.get("design"), f_design):
             continue
+        # Target group / purpose (Жен./Муж./Уни. etc).
+        if f_tg and not (_contains(r.get("target_group"), f_tg) or _contains(r.get("purpose"), f_tg)):
+            continue
+        if not _contains(r.get("material"), f_mat):
+            continue
+        if not _contains(r.get("type"), f_type):
+            continue
+        if not _contains(r.get("color"), f_color):
+            continue
         if not _contains(r.get("category"), f_cat):
             continue
         if not _row_matches_query(r, q):
@@ -4309,6 +4329,21 @@ def _snapshot_search_impl(
         total_units += int(parse_float(r.get("qty_units")) or 0)
         total_packs += int(parse_float(r.get("qty_packs")) or 0)
         total_value += float(parse_float(r.get("value")) or 0.0)
+        if g:
+            if g in {"target_group", "purpose"}:
+                k = (r.get("target_group") or r.get("purpose") or "").strip()
+            else:
+                k = (r.get(g) or "").strip()
+            if not k:
+                k = "(нет данных)"
+            b = breakdown.setdefault(
+                k,
+                {"key": k, "matched_rows_count": 0, "total_qty_units": 0, "total_qty_packs": 0, "total_value": 0.0},
+            )
+            b["matched_rows_count"] += 1
+            b["total_qty_units"] += int(parse_float(r.get("qty_units")) or 0)
+            b["total_qty_packs"] += int(parse_float(r.get("qty_packs")) or 0)
+            b["total_value"] += float(parse_float(r.get("value")) or 0.0)
         if include_rows and hard_limit is not None and len(matched) < hard_limit:
             matched.append(r)
 
@@ -4322,6 +4357,18 @@ def _snapshot_search_impl(
         "total_qty_packs": total_packs,
         "total_value": round(total_value, 2),
     }
+    if g:
+        out["group_by"] = group_by
+        out["breakdown"] = [
+            {
+                "key": v["key"],
+                "matched_rows_count": int(v["matched_rows_count"]),
+                "total_qty_units": int(v["total_qty_units"]),
+                "total_qty_packs": int(v["total_qty_packs"]),
+                "total_value": round(float(v["total_value"]), 2),
+            }
+            for v in sorted(breakdown.values(), key=lambda x: float(x.get("total_qty_units") or 0), reverse=True)
+        ]
     if include_rows:
         out["rows"] = matched
     return out
@@ -4337,10 +4384,15 @@ async def contactlenses_remain_goods_report_snapshot_search(
     product_name: Optional[str] = None,
     model: Optional[str] = None,
     design: Optional[str] = None,
+    target_group: Optional[str] = None,
+    material: Optional[str] = None,
+    type_: Optional[str] = Query(None, alias="type"),
+    color: Optional[str] = None,
     category: Optional[str] = None,
     query: Optional[str] = None,
     include_rows: bool = False,
     limit: int = 200,
+    group_by: Optional[str] = None,
 ) -> Any:
     """
     Search within the parsed remainGoodsReport snapshot rows.
@@ -4363,10 +4415,15 @@ async def contactlenses_remain_goods_report_snapshot_search(
         product_name=product_name,
         model=model,
         design=design,
+        target_group=target_group,
+        material=material,
+        type_=type_,
+        color=color,
         category=category,
         query=query,
         include_rows=include_rows,
         limit=limit,
+        group_by=group_by,
     )
     # Keep the richer fields for the existing endpoint.
     base["snapshot"] = {
@@ -4382,10 +4439,15 @@ async def contactlenses_remain_goods_report_snapshot_search(
         "product_name": product_name,
         "model": model,
         "design": design,
+        "target_group": target_group,
+        "material": material,
+        "type": type_,
+        "color": color,
         "category": category,
         "query": query,
         "include_rows": include_rows,
         "limit": limit,
+        "group_by": group_by,
     }
     return base
 
@@ -4400,10 +4462,15 @@ async def product_search(
     product_name: Optional[str] = None,
     model: Optional[str] = None,
     design: Optional[str] = None,
+    target_group: Optional[str] = None,
+    material: Optional[str] = None,
+    type_: Optional[str] = Query(None, alias="type"),
+    color: Optional[str] = None,
     category: Optional[str] = None,
     query: Optional[str] = None,
     include_rows: bool = False,
     limit: int = 50,
+    group_by: Optional[str] = None,
 ) -> Any:
     """
     Actions-friendly wrapper for snapshot row search.
@@ -4415,7 +4482,7 @@ async def product_search(
     snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
     if not snap:
         return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
-    return _snapshot_search_impl(
+    base = _snapshot_search_impl(
         snap=snap,
         report_type=report_type,
         department_name=department_name,
@@ -4424,11 +4491,42 @@ async def product_search(
         product_name=product_name,
         model=model,
         design=design,
+        target_group=target_group,
+        material=material,
+        type_=type_,
+        color=color,
         category=category,
         query=query,
         include_rows=include_rows,
         limit=limit,
+        group_by=group_by,
     )
+    # Proof block for Actions/management use-cases.
+    base["snapshot"] = {
+        "filename": snap.get("filename"),
+        "stored_at_unix": snap.get("stored_at_unix"),
+        "expires_at_unix": snap.get("expires_at_unix"),
+        "rows_count": snap.get("rows_count"),
+    }
+    base["filters_used"] = {
+        "report_type": report_type,
+        "department_name": department_name,
+        "brand": brand,
+        "manufacturer": manufacturer,
+        "product_name": product_name,
+        "model": model,
+        "design": design,
+        "target_group": target_group,
+        "material": material,
+        "type": type_,
+        "color": color,
+        "category": category,
+        "query": query,
+        "group_by": group_by,
+        "include_rows": include_rows,
+        "limit": limit if include_rows else None,
+    }
+    return base
 
 
 @app.get("/debug/optima/login-probe")
