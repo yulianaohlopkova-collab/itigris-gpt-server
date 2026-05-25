@@ -950,6 +950,11 @@ def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
             model = pick("модель")
             category = pick("категория", "тип товара", "тип")
             design = pick("дизайн")
+            purpose = pick("целевая группа", "целевая_группа", "пол", "purpose", "target")
+            material = pick("материал")
+            type_ = pick("тип", "тип оправы", "тип линз", "тип линзы", "lensType")
+            color = pick("цвет")
+            size = pick("размер")
             sku = pick("артикул", "sku", "код", "код товара")
             # Category-specific / layout-specific fallback naming.
             # Many report types don't have a single "Наименование" column; prefer model/brand when present.
@@ -970,6 +975,12 @@ def parse_remain_goods_xlsx(raw: bytes) -> List[Dict[str, Any]]:
                 "model": model,
                 "category": category,
                 "design": design,
+                "purpose": purpose,
+                "target_group": purpose,
+                "material": material,
+                "type": type_,
+                "color": color,
+                "size": size,
                 "sku": sku,
             }
 
@@ -1094,6 +1105,11 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
             model = pick("модель")
             category = pick("категория", "тип товара", "тип")
             design = pick("дизайн")
+            purpose = pick("целевая группа", "целевая_группа", "пол", "purpose", "target")
+            material = pick("материал")
+            type_ = pick("тип", "тип оправы", "тип линз", "тип линзы", "lensType")
+            color = pick("цвет")
+            size = pick("размер")
             sku = pick("артикул", "sku", "код", "код товара")
             if not product_name:
                 if model and brand:
@@ -1112,6 +1128,12 @@ def parse_remain_goods_xls(raw: bytes) -> List[Dict[str, Any]]:
                 "model": model,
                 "category": category,
                 "design": design,
+                "purpose": purpose,
+                "target_group": purpose,  # alias for convenience in callers
+                "material": material,
+                "type": type_,
+                "color": color,
+                "size": size,
                 "sku": sku,
             }
 
