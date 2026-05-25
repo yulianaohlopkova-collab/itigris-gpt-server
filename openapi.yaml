@@ -25,6 +25,24 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  ok:
+                    type: boolean
+                  version:
+                    type: string
+                  build_commit:
+                    type: string
+                  auto_refresh_impl_version:
+                    type: string
+                  itigris_app:
+                    type: string
+                  remote_api_key_configured:
+                    type: boolean
+                  external_api_key_configured:
+                    type: boolean
+                  server_token_configured:
+                    type: boolean
+                additionalProperties: true
 
   /departments:
     get:
@@ -37,6 +55,13 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  departments:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                additionalProperties: true
 
   /categories:
     get:
@@ -49,6 +74,13 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                additionalProperties: true
 
   /remains-filtered:
     post:
