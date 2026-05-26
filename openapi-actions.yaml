@@ -201,6 +201,134 @@ paths:
                       additionalProperties: true
                 additionalProperties: false
 
+  /low-stock-models:
+    get:
+      operationId: lowStockModels
+      summary: "PRIMARY (lists): low-stock models/groups from remainGoodsReport snapshot"
+      description: >
+        Use this when the user asks for a LIST/export like "модели по 1 штуке", "что на исходе", "выгрузи позиции с остатком <=1".
+        This endpoint groups snapshot rows and returns compact group results where total_qty_units <= threshold.
+        It does not guess. It's based on the parsed remainGoodsReport snapshot.
+      parameters:
+        - name: report_type
+          in: query
+          required: false
+          schema: { type: string }
+        - name: department_name
+          in: query
+          required: false
+          schema: { type: string }
+        - name: brand
+          in: query
+          required: false
+          schema: { type: string }
+        - name: manufacturer
+          in: query
+          required: false
+          schema: { type: string }
+        - name: product_name
+          in: query
+          required: false
+          schema: { type: string }
+        - name: model
+          in: query
+          required: false
+          schema: { type: string }
+        - name: design
+          in: query
+          required: false
+          schema: { type: string }
+        - name: target_group
+          in: query
+          required: false
+          schema: { type: string }
+        - name: material
+          in: query
+          required: false
+          schema: { type: string }
+        - name: type
+          in: query
+          required: false
+          schema: { type: string }
+        - name: color
+          in: query
+          required: false
+          schema: { type: string }
+        - name: category
+          in: query
+          required: false
+          schema: { type: string }
+        - name: query
+          in: query
+          required: false
+          schema: { type: string }
+        - name: threshold
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+            minimum: 0
+          description: Return groups where total_qty_units <= threshold.
+        - name: group_fields
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "department,brand,model,design,target_group"
+          description: Comma-separated list of fields to group by.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 500
+            minimum: 1
+            maximum: 5000
+        - name: output
+          in: query
+          required: false
+          schema:
+            type: string
+            default: json
+            enum: [json, csv]
+      responses:
+        "200":
+          description: Low-stock grouped list (JSON) or CSV stream (when output=csv)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  source: { type: string }
+                  report_type: { type: string }
+                  matched_department: { type: string, nullable: true }
+                  threshold: { type: integer }
+                  group_fields:
+                    type: array
+                    items: { type: string }
+                  groups_count: { type: integer }
+                  snapshot:
+                    type: object
+                    properties:
+                      filename: { type: string, nullable: true }
+                      stored_at_unix: { type: integer, nullable: true }
+                      expires_at_unix: { type: integer, nullable: true }
+                      rows_count: { type: integer, nullable: true }
+                    additionalProperties: true
+                  filters_used:
+                    type: object
+                    properties: {}
+                    additionalProperties: true
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      properties: {}
+                      additionalProperties: true
+                additionalProperties: false
+
   /contactlenses/remainGoodsReport/auto/refresh:
     post:
       operationId: remainGoodsReportAutoRefresh

@@ -4605,6 +4605,189 @@ async def product_search(
     return base
 
 
+@app.get("/low-stock-models")
+async def low_stock_models(
+    request: Request,
+    report_type: Optional[str] = None,
+    department_name: Optional[str] = None,
+    brand: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    product_name: Optional[str] = None,
+    model: Optional[str] = None,
+    design: Optional[str] = None,
+    target_group: Optional[str] = None,
+    material: Optional[str] = None,
+    type_: Optional[str] = Query(None, alias="type"),
+    color: Optional[str] = None,
+    category: Optional[str] = None,
+    query: Optional[str] = None,
+    threshold: int = 1,
+    group_fields: str = "department,brand,model,design,target_group",
+    limit: int = 500,
+    output: str = "json",  # json|csv
+) -> Any:
+    """
+    Return compact low-stock groups (total_qty_units <= threshold).
+
+    This is intended for large-list questions like:
+    - "модели по 1 штуке"
+    - "что на исходе"
+
+    It does NOT try to guess. It only groups/sums snapshot rows.
+    """
+    auth_err = require_auth_token(request)
+    if auth_err:
+        return auth_err
+    snap = get_global_snapshot_by_type(report_type) if report_type else get_global_snapshot()
+    if not snap:
+        return JSONResponse({"error": "global_snapshot_missing"}, status_code=404)
+
+    dep_filter = (department_name or "").strip()
+    if dep_filter:
+        matched_dep = _match_snapshot_department(dep_filter, sorted(list((snap.get("by_department") or {}).keys())))
+        if matched_dep:
+            dep_filter = matched_dep
+
+    q = _norm_text(query)
+    f_brand = _norm_text(brand)
+    f_manuf = _norm_text(manufacturer)
+    f_name = _norm_text(product_name)
+    f_model = _norm_text(model)
+    f_design = _norm_text(design)
+    f_tg = _norm_text(target_group)
+    f_mat = _norm_text(material)
+    f_type = _norm_text(type_)
+    f_color = _norm_text(color)
+    f_cat = _norm_text(category)
+
+    def _contains(field_val: Any, needle: str) -> bool:
+        if not needle:
+            return True
+        return needle in _norm_text(field_val)
+
+    def pick_group_key(r: Dict[str, Any], f: str) -> str:
+        fl = f.strip().lower()
+        if fl in {"target_group", "purpose"}:
+            v = (r.get("target_group") or r.get("purpose") or "").strip()
+        else:
+            v = (r.get(fl) or "").strip()
+        v = " ".join(v.replace("\u00a0", " ").split())
+        return v or "(нет данных)"
+
+    fields = [f.strip() for f in (group_fields or "").split(",") if f.strip()]
+    if not fields:
+        fields = ["department", "brand", "model", "design", "target_group"]
+
+    max_groups = max(1, min(int(limit or 500), 5000))
+    thr = max(0, int(threshold or 1))
+
+    agg: Dict[str, Dict[str, Any]] = {}
+    for r in list(snap.get("rows") or []):
+        if dep_filter and _norm_text(r.get("department")) != _norm_text(dep_filter):
+            continue
+        if not _contains(r.get("brand"), f_brand):
+            continue
+        if not _contains(r.get("manufacturer"), f_manuf):
+            continue
+        if not _contains(r.get("product_name"), f_name):
+            continue
+        if not _contains(r.get("model"), f_model):
+            continue
+        if not _contains(r.get("design"), f_design):
+            continue
+        if f_tg and not (_contains(r.get("target_group"), f_tg) or _contains(r.get("purpose"), f_tg)):
+            continue
+        if not _contains(r.get("material"), f_mat):
+            continue
+        if not _contains(r.get("type"), f_type):
+            continue
+        if not _contains(r.get("color"), f_color):
+            continue
+        if not _contains(r.get("category"), f_cat):
+            continue
+        if not _row_matches_query(r, q):
+            continue
+
+        key_parts = [pick_group_key(r, f) for f in fields]
+        key = "\t".join(key_parts)
+        a = agg.setdefault(
+            key,
+            {
+                "key_parts": dict(zip(fields, key_parts)),
+                "matched_rows_count": 0,
+                "total_qty_units": 0,
+                "total_qty_packs": 0,
+                "total_value": 0.0,
+            },
+        )
+        a["matched_rows_count"] += 1
+        a["total_qty_units"] += int(parse_float(r.get("qty_units")) or 0)
+        a["total_qty_packs"] += int(parse_float(r.get("qty_packs")) or 0)
+        a["total_value"] += float(parse_float(r.get("value")) or 0.0)
+
+    groups = [v for v in agg.values() if int(v.get("total_qty_units") or 0) <= thr]
+    groups_sorted = sorted(groups, key=lambda x: (int(x.get("total_qty_units") or 0), -float(x.get("total_value") or 0.0), -int(x.get("matched_rows_count") or 0)))
+    groups_sorted = groups_sorted[:max_groups]
+
+    payload = {
+        "ok": True,
+        "source": "remainGoodsReport snapshot",
+        "report_type": snap.get("report_type") or report_type,
+        "matched_department": dep_filter if department_name else None,
+        "threshold": thr,
+        "group_fields": fields,
+        "groups_count": len(groups_sorted),
+        "snapshot": {
+            "filename": snap.get("filename"),
+            "stored_at_unix": snap.get("stored_at_unix"),
+            "expires_at_unix": snap.get("expires_at_unix"),
+            "rows_count": snap.get("rows_count"),
+        },
+        "filters_used": {
+            "report_type": report_type,
+            "department_name": department_name,
+            "brand": brand,
+            "manufacturer": manufacturer,
+            "product_name": product_name,
+            "model": model,
+            "design": design,
+            "target_group": target_group,
+            "material": material,
+            "type": type_,
+            "color": color,
+            "category": category,
+            "query": query,
+        },
+        "groups": [
+            {
+                **g["key_parts"],
+                "matched_rows_count": int(g["matched_rows_count"]),
+                "total_qty_units": int(g["total_qty_units"]),
+                "total_qty_packs": int(g["total_qty_packs"]),
+                "total_value": round(float(g["total_value"]), 2),
+            }
+            for g in groups_sorted
+        ],
+    }
+
+    if (output or "json").lower() == "csv":
+        # Flat CSV with predictable columns.
+        cols = list(fields) + ["matched_rows_count", "total_qty_units", "total_qty_packs", "total_value"]
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=cols)
+        w.writeheader()
+        for row in payload["groups"]:
+            w.writerow({c: row.get(c) for c in cols})
+        data = buf.getvalue().encode("utf-8")
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=low_stock_models.csv"},
+        )
+
+    return payload
+
+
 @app.get("/debug/optima/login-probe")
 async def debug_optima_login_probe(request: Request) -> Any:
     """
