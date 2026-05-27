@@ -12,6 +12,50 @@ Status legend:
 - 🟡 available as reference (we have a file/export), but not auto-fetched yet
 - 🔴 needs reverse engineering (HAR/DevTools) or missing source
 
+## Critical Concepts (Must Be Explicit In v2)
+
+### 1) Weekly logic is core (I / II / III / IV / V)
+
+The operational dashboard is managed not only by month totals, but by:
+- plan vs fact per week (I..V)
+- deviation per week
+- month-to-date cumulative fact (accumulating)
+
+This implies v2 ingestion must support a stable week calendar for each month:
+- week boundaries (start/end) for I..V as used by the business
+- consistent assignment of orders/events to weeks
+
+### 2) Plans are a separate source (not ITigris)
+
+The dashboard is built around plan vs fact. Plans are not produced by ITigris and must be modeled as a separate
+entity/source:
+- plan by salon, by KPI, by week, by month
+- owner/versioning (who sets the plan, when changed)
+- export format (XLSX/CSV) for v1, then plan store (DB/Google Sheet/Notion) for v2+
+
+We should treat plans as *first-class data*:
+`PlanSource -> PlanFacts -> analytics`.
+
+### 3) People analytics is not one block
+
+In the real dashboard, "doctor / consultant / optometrist" blocks include distinct management views:
+- sales / revenue
+- avg check
+- lenses/frames KPIs
+- ranking and targets
+- performance tracking
+
+So in v2 we need explicit datasets keyed by employee and role, not a single generic "people performance" bucket.
+
+### 4) Non-ITigris metrics (ROI/CPA/visitors/new clients)
+
+Some KPIs likely come from outside ITigris (ads platforms, analytics, call-tracking, POS/traffic counters):
+- ROI / CPA (marketing spend + attribution)
+- visitors (traffic counters / analytics)
+- new clients (CRM logic + identity resolution)
+
+These must be explicitly marked as non-ITigris and modeled with their own ingestion path and limitations.
+
 ## Inventory / Stock (Товарка)
 
 | KPI / Output | Current Manual Source | Fields Needed | Target ITigris Source (v2) | Backend Status |
@@ -25,7 +69,7 @@ Status legend:
 
 | KPI / Output | Current Manual Source | Fields Needed | Target ITigris Source (v2) | Status |
 |---|---|---|---|---|
-| Revenue (выручка) by salon, month + week I–V | ITigris orders report -> dashboard | order_id, created_at/closed_at, status, department, sums (gross/net/discount), payment fields | ITigris “Orders report” endpoint/export (the same that produces QL export) | 🟡 reference file exists, auto-fetch 🔴 |
+| Revenue (выручка) by salon, month + week I–V | ITigris orders report -> dashboard | order_id, created_at/closed_at, status, department, sums (gross/net/discount), payment fields + week assignment | ITigris “Orders report” endpoint/export (the same that produces QL export) | 🟡 reference file exists, auto-fetch 🔴 |
 | Average order check (средний чек) | same | revenue / orders count, filter to completed orders | same as above | 🟡/🔴 |
 | Order structure: frames/lenses/contacts/etc in order | same | per-category sums or line items | either a richer orders report or multiple category line exports | 🟡/🔴 |
 
@@ -105,6 +149,7 @@ Priority order (v2):
 4. Frames lines export
 5. Lenses lines export
 6. Clients attribution export
+7. (Non-ITigris) Visitors/traffic source + marketing spend source, if ROI/CPA must be automated
 
 For each export we need to capture:
 - URL(s) called on “Export”
@@ -117,4 +162,3 @@ For each export we need to capture:
 Until v2 auto-fetch exists:
 - These datasets remain manual downloads.
 - The dashboard XLSX remains a reference truth for validating computed KPIs.
-
